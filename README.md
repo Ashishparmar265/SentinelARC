@@ -1,12 +1,22 @@
-# Project Synapse 🧠
+# Synapse Scholar – AI Literature Review Agent Swarm
 
-> **🌟 Multi-Branch Repository**: This repository showcases Project Synapse in two complementary implementations:
-> - 🎓 **[`educational-simulation`](https://github.com/YanCotta/project-synapse/tree/educational-simulation)**: A comprehensive educational simulation with detailed documentation, perfect for understanding multi-agent architecture concepts without running live services.
-> - 🚀 **[`working-app`](https://github.com/YanCotta/project-synapse/tree/working-app)**: A fully functional, production-ready implementation with Docker, Kubernetes, and monitoring. **You are currently viewing this branch.**
+**Forked & significantly enhanced from**  
+Original: https://github.com/yancotta/project-synapse  
+Original author: yancotta (inactive since ~2019)
 
-**A production-ready multi-agent system showcasing Agent Communication Protocol (ACP) and Model Context Protocol (MCP) capabilities through a collaborative research workflow.**
+## Original Project
+- Basic multi-agent architecture with RabbitMQ + FastAPI
+- Early MCP tooling for web fetch
 
-> *"Where artificial intelligence meets production-grade architecture"*
+## My Major Improvements (2026)
+- Replaced unreliable Playwright/MCP browser fetch with **Semantic Scholar API** (stable, no CAPTCHA)
+- Fixed critical bugs: Docker port binding, IndentationError, recursive crashes, env loading
+- Added proper API key support via `.env`
+- Refocused on **academic literature review** for thesis students
+- Structured output: top-cited papers with titles, authors, abstracts, citations, PDFs
+- Prepared foundation for LLM summarization + Streamlit dashboard
+
+This is now a practical tool for scholars, not just a demo.
 
 ## 🎯 Project Overview
 
