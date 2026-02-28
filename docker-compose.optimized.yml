@@ -81,6 +81,8 @@ services:
       - PRIMARY_TOOLING_URL=http://primary-tooling-server:8001
       - FILESYSTEM_URL=http://filesystem-server:8002
     volumes:
+      - ./src:/app/src
+      - ./async_main.py:/app/async_main.py
       - ./output:/app/output
       - ./temp:/app/temp
       - ./logs:/app/logs

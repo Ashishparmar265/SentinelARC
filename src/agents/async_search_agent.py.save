@@ -42,9 +42,8 @@ class AsyncSearchAgent(AsyncBaseAgent):
                         'role': 'system',
                         'content': (
                             "You are an academic research assistant. "
-                            "Expand the user's query into a more effective search string for Semantic Scholar. "
-                            "Focus on keywords and synonyms connected with OR. "
-                            "Keep it simple and broad to avoid zero results — avoid complex AND/OR nesting. "
+                            "Expand the user's query into a more precise, keyword-rich version suitable for scholarly search. "
+                            "Include synonyms, related terms, and academic variants. "
                             "Output only the expanded search string, no explanation."
                         )
                     },
@@ -56,6 +55,10 @@ class AsyncSearchAgent(AsyncBaseAgent):
                 options={'temperature': 0.3}  # Low creativity for precision
             )
             expanded_query = response['message']['content'].strip()
+ "Expand the user's query into a more precise, keywo>
+                            "Include synonyms, related terms, and academic vari>
+                            "Output only the expanded search string, no explana>
+                        )
             logger.info(f"[{self.agent_id}] Original query: {query}")
             logger.info(f"[{self.agent_id}] Expanded query: {expanded_query}")
         except Exception as e:
@@ -94,25 +97,11 @@ class AsyncSearchAgent(AsyncBaseAgent):
 
             data = response.json()
             papers = data.get("data", [])
-            
-            # Structured results list for orchestrator/extraction pipeline
-            results = []
-            content = "No relevant academic papers found."  # Default - always defined
 
             if not papers:
-                logger.warning(f"[{self.agent_id}] Zero papers with expanded query. Retrying with original query...")
-                await asyncio.sleep(10)  # Delay to avoid immediate rate limit on fallback
-                params["query"] = query
-                response = requests.get(url, params=params, headers=headers, timeout=15)
-
-                if response.status_code != 200:
-                    logger.error(f"[{self.agent_id}] Fallback API call failed: {response.status_code} - {response.text}")
-                else:
-                    data = response.json()
-                    papers = data.get("data", [])
-
-            # Build structured results + human-readable content if we have papers (after fallback)
-            if papers:
+                logger.warning(f"[{self.agent_id}] No papers found for query")
+                content = "No relevant academic papers found."
+            else:
                 content_parts = []
                 for paper in papers:
                     title = paper.get("title", "No title")
@@ -123,51 +112,34 @@ class AsyncSearchAgent(AsyncBaseAgent):
                     abstract = (abstract_raw[:300] + "...") if abstract_raw and isinstance(abstract_raw, str) else "No abstract available"
                     citations = paper.get("citationCount", 0)
                     open_pdf = paper.get("openAccessPdf", {})
-                    pdf_url = open_pdf.get("url") if isinstance(open_pdf, dict) else None
-                    paper_url = paper.get("url")
-                    primary_url = pdf_url or paper_url or ""
+                    pdf_url = open_pdf.get("url", "No open PDF") if isinstance(open_pdf, dict) else "No open PDF"
+                    paper_url = paper.get("url", "No link")
 
-                    # Append to orchestrator-facing structured results list
-                    results.append(
-                        {
-                            "paperId": paper.get("paperId"),
-                            "title": title,
-                            "year": year,
-                            "venue": paper.get("venue"),
-                            "citationCount": citations,
-                            # URL used by orchestrator for extraction tasks
-                            "url": primary_url,
-                            # Extra URLs kept for potential future use
-                            "paper_url": paper_url,
-                            "pdf_url": pdf_url,
-                        }
-                    )
-
-                    # Append to human-readable summary content
                     content_parts.append(
                         f"**Title**: {title}\n"
                         f"**Authors**: {authors}\n"
-                        f"**Year**: {year} | **Citations**: {citations}\n"
+if not papers:
+    logger.warning(f"[{self.agent_id}] Zero papers with expanded query. Retrying with original query...")
+    params["query"] = query  # fallback to original
+    response = requests.get(url, params=params, headers=headers, timeout=15)
+    data = response.json()
+    papers = data.get("data", [])                        f"**Year**: {year} | **Citations**: {citations}\n"
                         f"**Abstract**: {abstract}\n"
-                        f"**PDF**: {pdf_url or 'No open PDF'}\n"
-                        f"**Link**: {paper_url or 'No link'}\n"
+                        f"**PDF**: {pdf_url}\n"
+                        f"**Link**: {paper_url}\n"
                         f"---\n"
                     )
 
                 content = "\n".join(content_parts)
 
-            # Log preview of final content
-            preview = content[:500] + "..." if len(content) > 500 else content
-            logger.info(f"[{self.agent_id}] Final content preview (first 500 chars): {preview}")
-
-            logger.info(f"[{self.agent_id}] Found {len(papers)} papers. Structured results: {len(results)}. Content length: {len(content)}")
+            logger.info(f"[{self.agent_id}] Found {len(papers)} papers. Content length: {len(content)}")
 
             data_message = self.create_message(
                 receiver_id=self.orchestrator_id,
                 msg_type=ACPMsgType.DATA_SUBMIT,
                 payload=DataSubmitPayload(
                     data_type="search_results",
-                    data={"query": query, "content": content, "results": results},
+                    data={"query": query, "content": content},
                     source="semantic_scholar",
                     task_id=task_id
                 ).model_dump()
@@ -177,17 +149,4 @@ class AsyncSearchAgent(AsyncBaseAgent):
 
         except Exception as e:
             logger.error(f"[{self.agent_id}] Semantic Scholar Error: {str(e)}", exc_info=True)
-
-            # Graceful fallback to orchestrator
-            fallback_content = f"Search failed due to error or rate limit.\nError: {str(e)}"
-            data_message = self.create_message(
-                receiver_id=self.orchestrator_id,
-                msg_type=ACPMsgType.DATA_SUBMIT,
-                payload=DataSubmitPayload(
-                    data_type="search_results",
-                    data={"query": query, "content": fallback_content},
-                    source="semantic_scholar",
-                    task_id=task_id
-                ).model_dump()
-            )
-            await self.send_message(data_message)
+            raise

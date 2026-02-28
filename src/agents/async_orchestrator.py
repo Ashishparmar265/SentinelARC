@@ -145,6 +145,16 @@ class AsyncOrchestratorAgent(AsyncBaseAgent):
         
         logger.info(f"[{self.agent_id}] Received {len(results)} search results")
         
+        # Fallback: if no structured results (e.g. API/network failure), skip extraction
+        # and proceed directly to synthesis so the workflow can still complete.
+        if not results:
+            logger.warning(
+                f"[{self.agent_id}] No structured search results available – "
+                "proceeding to synthesis without external sources"
+            )
+            await self._assign_synthesis_task()
+            return
+        
         # Assign extraction tasks for top results
         extraction_tasks = []
         for i, result in enumerate(results[:3]):  # Extract from top 3 results

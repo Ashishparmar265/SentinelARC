@@ -1,128 +1,118 @@
 """
 Async Synthesis Agent
-
 Agent responsible for synthesizing research findings into coherent reports asynchronously.
-Demonstrates MCP Sampling for AI-assisted text generation.
+Now uses Ollama for intelligent summarization and content generation.
 """
 
 import logging
+import asyncio
+import ollama
 from typing import Dict, List
-
-from .async_base_agent import AsyncBaseAgent, MCPClientMixin
+from .async_base_agent import AsyncBaseAgent
 from ..protocols.acp_schema import (
-    ACPMessage, ACPMsgType, TaskAssignPayload, StatusUpdatePayload, 
+    ACPMessage, ACPMsgType, TaskAssignPayload, StatusUpdatePayload,
     DataSubmitPayload, LogBroadcastPayload
 )
 
 logger = logging.getLogger(__name__)
 
+class AsyncSynthesisAgent(AsyncBaseAgent):
+    """
+    Asynchronous agent that synthesizes research findings into comprehensive reports.
+    
+    Features:
+    - Ollama-powered generation of introduction, source analysis, and conclusions
+    - Progress status updates to orchestrator
+    - Structured Markdown report with metadata
+    - Graceful error handling and fallback text
+    """
 
-class AsyncSynthesisAgent(AsyncBaseAgent, MCPClientMixin):
-    """
-    Asynchronous agent that synthesizes research findings into coherent reports.
-    
-    Demonstrates:
-    - MCP Sampling for AI-assisted text generation and rephrasing
-    - Async content synthesis from multiple sources
-    - Report structuring and formatting
-    - Text improvement through iterative refinement
-    """
-    
     def __init__(self, agent_id: str, message_bus, mcp_servers: Dict[str, str]):
         """Initialize the async synthesis agent."""
-        AsyncBaseAgent.__init__(self, agent_id, message_bus, mcp_servers)
-        MCPClientMixin.__init__(self)
-        
+        super().__init__(agent_id, message_bus, mcp_servers)
         self.orchestrator_id = "orchestrator"
-        
         logger.info(f"[{self.agent_id}] Async Synthesis Agent initialized")
-    
+
     async def handle_message(self, message: ACPMessage):
         """Handle incoming ACP messages."""
         try:
             if message.msg_type == ACPMsgType.TASK_ASSIGN:
                 await self._handle_task_assignment(message)
+            elif message.msg_type == ACPMsgType.DATA_SUBMIT:
+                payload = DataSubmitPayload(**message.payload)
+                if payload.data_type == "search_results":
+                    await self._synthesize_research_report(payload.data, payload.task_id)
             else:
                 logger.warning(f"[{self.agent_id}] Unhandled message type: {message.msg_type.value}")
-                
         except Exception as e:
             logger.error(f"[{self.agent_id}] Error handling message: {e}")
-    
+
     async def _handle_task_assignment(self, message: ACPMessage):
-        """Handle synthesis task assignments."""
+        """Handle synthesis task assignments (legacy support)."""
         try:
             payload = TaskAssignPayload(**message.payload)
-            
             if payload.task_type == "synthesize_research":
-                await self._synthesize_research_report(payload.task_data)
+                await self._synthesize_research_report(payload.task_data, payload.task_data.get("task_id"))
             else:
                 logger.warning(f"[{self.agent_id}] Unknown task type: {payload.task_type}")
-                
         except Exception as e:
             logger.error(f"[{self.agent_id}] Error in task assignment: {e}")
             await self._send_error_status(str(e))
-    
-    async def _synthesize_research_report(self, task_data: Dict):
-        """Synthesize research findings into a comprehensive report."""
-        query = task_data.get("query")
+
+    async def _synthesize_research_report(self, task_data: Dict, task_id: str = None):
+        """Synthesize research findings into a comprehensive report using Ollama."""
+        query = task_data.get("query", "unknown")
         search_results = task_data.get("search_results", [])
         extracted_content = task_data.get("extracted_content", [])
-        task_id = task_data.get("task_id", "unknown")
-        
+        task_id = task_id or task_data.get("task_id", "unknown")
+
         if not query:
             error_msg = "No research query provided for synthesis"
             logger.error(f"[{self.agent_id}] {error_msg}")
             await self._send_error_status(error_msg, task_id)
             return
-        
-        logger.info(f"[{self.agent_id}] Starting synthesis for: '{query}'")
-        
+
+        logger.info(f"[{self.agent_id}] Starting synthesis for: '{query}' (task: {task_id})")
+
         try:
-            # Send initial status update
+            # Send initial status
             await self._send_status_update("synthesis_starting", 10.0, task_id)
-            
-            # Create the report structure
+
             report_sections = []
-            
-            # Introduction
+
+            # 1. Introduction
             await self._send_status_update("creating_introduction", 20.0, task_id)
             intro = await self._create_introduction(query)
-            improved_intro = await self._improve_text_with_mcp(intro)
-            report_sections.append(f"## Introduction\\n\\n{improved_intro}")
-            
-            # Findings from each source
+            report_sections.append(f"## Introduction\n\n{intro}")
+
+            # 2. Source Analysis
             await self._send_status_update("analyzing_sources", 40.0, task_id)
             for i, content in enumerate(extracted_content):
                 if content.get("extraction_successful", False):
-                    section_title = f"Source {i+1} Analysis"
-                    section_content = await self._create_source_analysis(content)
-                    improved_content = await self._improve_text_with_mcp(section_content)
-                    report_sections.append(f"## {section_title}\\n\\n{improved_content}")
-            
-            # Synthesis and conclusions
+                    section = await self._create_source_analysis(content, i + 1)
+                    report_sections.append(section)
+
+            # 3. Synthesis and Conclusions
             await self._send_status_update("creating_synthesis", 70.0, task_id)
             conclusion = await self._create_conclusion(query, extracted_content)
-            improved_conclusion = await self._improve_text_with_mcp(conclusion)
-            report_sections.append(f"## Synthesis and Conclusions\\n\\n{improved_conclusion}")
-            
-            # Methodology and sources
+            report_sections.append(f"## Synthesis and Conclusions\n\n{conclusion}")
+
+            # 4. Methodology and Metadata (keep static)
             await self._send_status_update("adding_metadata", 90.0, task_id)
             methodology = await self._create_methodology(search_results, extracted_content)
-            report_sections.append(f"## Research Methodology\\n\\n{methodology}")
-            
-            # Combine all sections
-            full_report = f"# Research Report: {query}\\n\\n" + "\\n\\n".join(report_sections)
-            
-            # Add metadata
             metadata = await self._create_metadata(search_results, extracted_content)
-            full_report += f"\\n\\n## Research Metadata\\n\\n{metadata}"
-            
+            report_sections.append(f"## Research Methodology\n\n{methodology}")
+            report_sections.append(f"## Research Metadata\n\n{metadata}")
+
+            # Combine into final report
+            full_report = f"# Research Report: {query}\n\n" + "\n\n".join(report_sections)
+
             logger.info(f"[{self.agent_id}] Synthesis completed: {len(full_report.split())} words")
-            
+
             # Send completion status
             await self._send_status_update("synthesis_complete", 100.0, task_id)
-            
-            # Send completed report
+
+            # Send report to orchestrator
             synthesis_data = {
                 "report_content": full_report,
                 "word_count": len(full_report.split()),
@@ -130,20 +120,19 @@ class AsyncSynthesisAgent(AsyncBaseAgent, MCPClientMixin):
                 "sources_analyzed": len([c for c in extracted_content if c.get("extraction_successful", False)]),
                 "query": query
             }
-            
+
             data_message = self.create_message(
                 receiver_id=self.orchestrator_id,
                 msg_type=ACPMsgType.DATA_SUBMIT,
                 payload=DataSubmitPayload(
                     data_type="synthesis_report",
                     data=synthesis_data,
-                    source="synthesis_engine",
+                    source="ollama_synthesis",
                     task_id=task_id
                 ).model_dump()
             )
-            
             await self.send_message(data_message)
-            
+
             # Broadcast completion log
             log_message = self.create_message(
                 topic="logs",
@@ -154,162 +143,131 @@ class AsyncSynthesisAgent(AsyncBaseAgent, MCPClientMixin):
                     component=self.agent_id
                 ).model_dump()
             )
-            
             await self.send_message(log_message)
-            
+
         except Exception as e:
             error_msg = f"Synthesis failed: {e}"
             logger.error(f"[{self.agent_id}] {error_msg}")
             await self._send_error_status(error_msg, task_id)
-    
-    async def _create_introduction(self, query: str) -> str:
-        """Create an introduction section for the report."""
-        return f"""This research report investigates the question: "{query}". 
 
-The analysis draws from multiple authoritative sources to provide a comprehensive overview of current developments, key findings, and implications in this rapidly evolving field. Our investigation synthesizes information from academic papers, technical documentation, and expert analyses to present a balanced perspective on this important topic."""
-    
-    async def _create_source_analysis(self, content_data: Dict) -> str:
-        """Create analysis text for a single source."""
+    async def _create_introduction(self, query: str) -> str:
+        """Generate intelligent introduction using Ollama."""
+        try:
+            response = ollama.chat(
+                model='llama3.1:8b',
+                messages=[
+                    {
+                        'role': 'system',
+                        'content': (
+                            "You are an academic writing assistant. "
+                            "Write a concise, professional introduction (150–250 words) for a research report. "
+                            "Include: the research question, why it matters, scope of the synthesis, and what the report covers. "
+                            "Use formal tone, no fluff. Output only the introduction text."
+                        )
+                    },
+                    {
+                        'role': 'user',
+                        'content': f"Research question: {query}"
+                    }
+                ],
+                options={'temperature': 0.4}
+            )
+            intro = response['message']['content'].strip()
+            logger.info(f"[{self.agent_id}] Introduction generated ({len(intro.split())} words)")
+            return intro
+        except Exception as e:
+            logger.warning(f"[{self.agent_id}] Ollama intro failed: {e}")
+            return f"This report investigates: '{query}'. It synthesizes findings from available academic sources to provide an overview of key developments and implications."
+
+    async def _create_source_analysis(self, content_data: Dict, index: int) -> str:
+        """Generate analysis for one source using Ollama."""
         url = content_data.get("url", "Unknown source")
         title = content_data.get("title", "Untitled")
-        content = content_data.get("content", "")
-        word_count = content_data.get("word_count", 0)
-        
-        # Extract key points from content
-        key_points = await self._extract_key_points(content)
-        
-        analysis = f"""**Source**: [{title}]({url})
+        content = content_data.get("content", "")[:3000]  # truncate to avoid token limits
 
-**Content Summary** ({word_count} words):
+        try:
+            response = ollama.chat(
+                model='llama3.1:8b',
+                messages=[
+                    {
+                        'role': 'system',
+                        'content': (
+                            "You are an academic analyst. "
+                            "Summarize the provided source content in 3–5 bullet points. "
+                            "Focus on key findings, methods, and relevance to the research question. "
+                            "Use formal tone. Output only the bullet points."
+                        )
+                    },
+                    {
+                        'role': 'user',
+                        'content': f"Source title: {title}\nURL: {url}\n\nContent:\n{content}"
+                    }
+                ],
+                options={'temperature': 0.4}
+            )
+            analysis = response['message']['content'].strip()
+            logger.info(f"[{self.agent_id}] Source {index} analysis generated ({len(analysis.split())} words)")
+        except Exception as e:
+            logger.warning(f"[{self.agent_id}] Ollama source analysis failed: {e}")
+            analysis = "• Summary generation failed for this source.\n• Raw content is available in the full report."
 
-{key_points}
+        return f"## Source {index}: {title}\n\n[Link]({url})\n\n{analysis}"
 
-**Key Insights**:
-
-This source provides valuable perspective on the research question through detailed analysis and evidence-based conclusions. The information contributes to our understanding by offering specific insights and supporting data relevant to the investigation."""
-        
-        return analysis
-    
-    async def _extract_key_points(self, content: str) -> str:
-        """Extract key points from content."""
-        # Simple key point extraction
-        sentences = [s.strip() for s in content.split('.') if len(s.strip()) > 50]
-        
-        # Take first few substantial sentences as key points
-        key_sentences = sentences[:3]
-        
-        if key_sentences:
-            return '\\n\\n'.join([f"• {sentence}." for sentence in key_sentences])
-        else:
-            return "• Content provides technical background and context for the research question."
-    
     async def _create_conclusion(self, query: str, extracted_content: List[Dict]) -> str:
-        """Create synthesis and conclusions section."""
-        successful_extractions = [c for c in extracted_content if c.get("extraction_successful", False)]
-        
-        conclusion = f"""Based on our analysis of {len(successful_extractions)} authoritative sources, several key themes emerge regarding {query}:
+        """Generate synthesis and conclusions using Ollama."""
+        successful = [c for c in extracted_content if c.get("extraction_successful", False)]
+        content_snippets = "\n\n".join([c.get("content", "")[:1000] for c in successful[:3]])  # top 3 sources
 
-**Primary Findings**:
+        try:
+            response = ollama.chat(
+                model='llama3.1:8b',
+                messages=[
+                    {
+                        'role': 'system',
+                        'content': (
+                            "You are an academic synthesizer. "
+                            "Write concise conclusions (200–300 words) based on the provided sources. "
+                            "Include: main findings, common themes, implications, and suggested future research. "
+                            "Use formal tone. Output only the conclusions text."
+                        )
+                    },
+                    {
+                        'role': 'user',
+                        'content': f"Research question: {query}\n\nKey source excerpts:\n{content_snippets}"
+                    }
+                ],
+                options={'temperature': 0.4}
+            )
+            conclusion = response['message']['content'].strip()
+            logger.info(f"[{self.agent_id}] Conclusion generated ({len(conclusion.split())} words)")
+            return conclusion
+        except Exception as e:
+            logger.warning(f"[{self.agent_id}] Ollama conclusion failed: {e}")
+            return f"Based on {len(successful)} sources, this report highlights key trends in '{query}'. Further research is recommended."
 
-• The research reveals significant developments in this field with important implications for current practices and future directions.
-
-• Multiple sources converge on similar conclusions, providing strong evidence for the trends and patterns identified in this investigation.
-
-• The evidence suggests that continued attention to this area is warranted given its potential impact on related fields and applications.
-
-**Implications**:
-
-The synthesis of these sources demonstrates the complexity and evolving nature of this topic. The convergent evidence from multiple authoritative sources provides a solid foundation for understanding current developments and anticipating future trends.
-
-**Future Research Directions**:
-
-This analysis highlights several areas where additional investigation would be valuable to further advance our understanding and address remaining questions in this important field."""
-        
-        return conclusion
-    
+    # Keep these static sections unchanged
     async def _create_methodology(self, search_results: List[Dict], extracted_content: List[Dict]) -> str:
-        """Create methodology section."""
         return f"""**Research Methodology**:
+This report was generated through:
+1. Semantic Scholar search yielding {len(search_results)} results
+2. Content extraction from {len([c for c in extracted_content if c.get("extraction_successful", False)])} sources
+3. LLM-powered synthesis using Ollama (llama3.1:8b)
+4. Structured formatting into Markdown report"""
 
-This report was generated through a systematic multi-stage process:
-
-1. **Information Discovery**: Conducted web search yielding {len(search_results)} relevant sources
-2. **Content Extraction**: Successfully extracted content from {len([c for c in extracted_content if c.get("extraction_successful", False)])} sources
-3. **Analysis and Synthesis**: Applied structured analysis to identify key themes and insights
-4. **Report Generation**: Synthesized findings into coherent narrative with supporting evidence
-
-**Source Quality**: All sources were selected based on relevance and authority in the field."""
-    
     async def _create_metadata(self, search_results: List[Dict], extracted_content: List[Dict]) -> str:
-        """Create metadata section."""
-        successful_extractions = [c for c in extracted_content if c.get("extraction_successful", False)]
-        total_words = sum(c.get("word_count", 0) for c in successful_extractions)
-        
-        source_list = "\\n".join([
-            f"• [{c.get('title', 'Untitled')}]({c.get('url', '#')})"
-            for c in successful_extractions
-        ])
-        
-        return f"""**Research Statistics**:
-- Sources Analyzed: {len(successful_extractions)}
-- Total Content Words: {total_words:,}
-- Search Results: {len(search_results)}
+        successful = [c for c in extracted_content if c.get("extraction_successful", False)]
+        total_words = sum(len(c.get("content", "").split()) for c in successful)
+        source_list = "\n".join([f"• [{c.get('title', 'Untitled')}]({c.get('url', '#')})" for c in successful])
 
+        return f"""**Research Statistics**:
+- Sources Analyzed: {len(successful)}
+- Total Words Extracted: {total_words:,}
+- Search Results: {len(search_results)}
 **Sources**:
 {source_list}
+**Generation Date**: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')} IST"""
 
-**Generation Date**: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC"""
-    
-    async def _improve_text_with_mcp(self, text: str) -> str:
-        """Improve text using MCP Sampling for sentence rephrasing."""
-        try:
-            sentences = text.split(". ")
-            improved_sentences = []
-            
-            for sentence in sentences:
-                sentence = sentence.strip()
-                if len(sentence) > 50:  # Only improve longer sentences
-                    try:
-                        # MCP Sampling: Request AI assistance (simulated)
-                        improved_sentence = await self._simulate_text_improvement(sentence)
-                        improved_sentences.append(improved_sentence)
-                    except Exception as e:
-                        logger.debug(f"[{self.agent_id}] Text improvement failed for sentence, using original: {e}")
-                        improved_sentences.append(sentence)
-                else:
-                    improved_sentences.append(sentence)
-            
-            return ". ".join(improved_sentences)
-            
-        except Exception as e:
-            logger.warning(f"[{self.agent_id}] Text improvement failed, returning original: {e}")
-            return text
-    
-    async def _simulate_text_improvement(self, text: str) -> str:
-        """Simulate MCP Sampling text improvement."""
-        # In production, this would call the UserInteractionServer
-        # For now, apply simple improvements
-        improved = text
-        
-        replacements = {
-            "very good": "excellent",
-            "very bad": "problematic",
-            "a lot of": "numerous",
-            "thing": "element",
-            "stuff": "content",
-            "get": "obtain",
-            "make": "create",
-            "big": "substantial",
-            "small": "minimal"
-        }
-        
-        for old, new in replacements.items():
-            improved = improved.replace(old, new)
-        
-        return improved
-    
     async def _send_status_update(self, status: str, progress: float = None, task_id: str = None):
-        """Send status update to orchestrator."""
         status_message = self.create_message(
             receiver_id=self.orchestrator_id,
             msg_type=ACPMsgType.STATUS_UPDATE,
@@ -319,21 +277,8 @@ This report was generated through a systematic multi-stage process:
                 task_id=task_id
             ).model_dump()
         )
-        
         await self.send_message(status_message)
         logger.debug(f"[{self.agent_id}] Status update sent: {status}")
-    
+
     async def _send_error_status(self, error_message: str, task_id: str = None):
-        """Send error status to orchestrator."""
         await self._send_status_update(f"synthesis_failed: {error_message}", 0.0, task_id)
-    
-    def get_capabilities(self) -> Dict[str, str]:
-        """Return agent capabilities."""
-        return {
-            "agent_type": "synthesis_agent",
-            "primary_function": "report_generation",
-            "mcp_tools": ["text_improvement"],
-            "supported_tasks": ["synthesize_research"],
-            "sampling_support": True,
-            "async_capable": True
-        }

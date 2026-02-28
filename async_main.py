@@ -7,6 +7,7 @@ import asyncio
 import os
 import sys
 import logging
+
 from typing import Dict, List
 from dotenv import load_dotenv
 from fastapi import FastAPI, BackgroundTasks, HTTPException
@@ -88,6 +89,12 @@ async def initialize_system():
 async def startup_event():
     # Start initialization in the background
     asyncio.create_task(initialize_system())
+    
+    import subprocess
+    subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    await asyncio.sleep(5)  # Wait for server to be ready
+    logger.info("Ollama server started in background")
+    
 
 @app.get("/health")
 async def health():

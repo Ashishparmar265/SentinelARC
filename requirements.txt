@@ -32,3 +32,8 @@ mcp
 langchain-mcp-adapters
 langchain-openai
 requests
+ollama
+
+# Web UI
+streamlit>=1.40.0
+

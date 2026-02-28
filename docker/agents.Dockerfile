@@ -65,5 +65,14 @@ RUN mkdir -p /app/output /app/temp /app/logs
 # Expose port (optional, but good practice)
 EXPOSE 8000
 
+# Install zstd (required by Ollama installer)
+RUN apt-get update && apt-get install -y zstd && rm -rf /var/lib/apt/lists/*
+
+# Install Ollama
+RUN curl -fsSL https://ollama.com/install.sh | sh
+
+# Pull model during build (server starts temporarily, pulls, then stops)
+RUN ollama serve & sleep 10 && ollama pull llama3.1:8b && pkill ollama
+
 # Run the application
 CMD ["python", "async_main.py"]

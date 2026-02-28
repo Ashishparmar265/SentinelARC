@@ -90,8 +90,6 @@ services:
       filesystem-server:
         condition: service_healthy
     volumes:
-      - ./src:/app/src
-      - ./async_main.py:/app/async_main.py
       - ./output:/app/output
       - ./temp:/app/temp
       - ./logs:/app/logs
