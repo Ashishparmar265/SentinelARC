@@ -37,3 +37,6 @@ ollama
 # Web UI
 streamlit>=1.40.0
 
+# PDF generation for the dashboard
+reportlab>=4.0.0
+

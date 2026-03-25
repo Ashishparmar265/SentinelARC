@@ -94,6 +94,24 @@ services:
     networks:
       - synapse-network
 
+  synapse-streamlit:
+    build:
+      context: .
+      dockerfile: docker/streamlit.Dockerfile
+    container_name: synapse-streamlit
+    restart: always
+    environment:
+      - SYNAPSE_API_URL=http://synapse-agents:8000
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./output:/app/output
+      - ./temp:/app/temp
+    depends_on:
+      - synapse-agents
+    networks:
+      - synapse-network
+
 networks:
   synapse-network:
     driver: bridge

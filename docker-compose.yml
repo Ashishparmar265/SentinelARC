@@ -99,6 +99,22 @@ services:
       - "8000:8000"
     command: ["python", "async_main.py"]
 
+  synapse-streamlit:
+    build:
+      context: .
+      dockerfile: docker/streamlit.Dockerfile
+    container_name: synapse-streamlit
+    restart: always
+    environment:
+      - SYNAPSE_API_URL=http://synapse-agents:8000
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./output:/app/output
+      - ./temp:/app/temp
+    depends_on:
+      - synapse-agents
+
 volumes:
   rabbitmq_data:
     driver: local
