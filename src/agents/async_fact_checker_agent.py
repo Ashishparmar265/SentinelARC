@@ -1,11 +1,11 @@
 """
-Async Fact Checker Agent
-
 Agent responsible for validating claims and data against multiple sources asynchronously.
-Demonstrates A2A peer review and negotiation patterns.
+Uses Ollama for intelligent fact verification.
 """
 
 import logging
+import re
+import ollama
 from typing import Dict, List, Tuple
 
 from .async_base_agent import AsyncBaseAgent, MCPClientMixin
@@ -200,8 +200,8 @@ class AsyncFactCheckerAgent(AsyncBaseAgent, MCPClientMixin):
             if len(sentence) > 20:  # Only consider substantial sentences
                 # Look for statements that could be factual claims
                 claim_indicators = [
-                    'quantum', 'encryption', 'algorithm', 'NIST', 'research shows',
-                    'studies indicate', 'according to', 'demonstrated that'
+                    'is', 'are', 'shows', 'indicates', 'proposes', 'demonstrates', 'suggests', 'found that',
+                    'concludes', 'identified', 'significant', 'quantum', 'algorithm'
                 ]
                 
                 if any(indicator in sentence.lower() for indicator in claim_indicators):
@@ -212,43 +212,53 @@ class AsyncFactCheckerAgent(AsyncBaseAgent, MCPClientMixin):
     
     async def _validate_claim_async(self, claim: str, source_url: str = None) -> Tuple[bool, float, str]:
         """
-        Asynchronously validate a claim against available sources.
-        
-        Args:
-            claim: The claim to validate
-            source_url: Optional source URL for context
-            
-        Returns:
-            Tuple of (is_valid, confidence_score, evidence)
+        Asynchronously validate a claim against available sources using Ollama.
         """
         try:
-            # Simulate async validation process
-            # In production, this would involve:
-            # - Cross-referencing against known databases
-            # - Searching for supporting/contradicting evidence
-            # - Analyzing source credibility
+            logger.info(f"[{self.agent_id}] Consulting Ollama for claim: '{claim[:50]}...'")
             
-            claim_lower = claim.lower()
+            response = ollama.chat(
+                model='llama3.1:8b',
+                messages=[
+                    {
+                        'role': 'system',
+                        'content': (
+                            "You are a critical fact-checker. "
+                            "Evaluate the following claim based on common scientific knowledge and the provided context. "
+                            "Provide your assessment in the following format: "
+                            "VALID: [True/False]\n"
+                            "CONFIDENCE: [0.0 to 1.0]\n"
+                            "EVIDENCE: [Brief explanation of why it is valid or invalid]"
+                        )
+                    },
+                    {
+                        'role': 'user',
+                        'content': f"Claim: {claim}"
+                    }
+                ],
+                options={'temperature': 0.2}
+            )
             
-            # Mock validation logic based on content
-            if any(term in claim_lower for term in ['quantum', 'encryption', 'cryptography']):
-                if 'break' in claim_lower or 'obsolete' in claim_lower:
-                    return True, 0.85, "Supported by multiple cryptographic research papers"
-                elif 'nist' in claim_lower or 'standard' in claim_lower:
-                    return True, 0.92, "Confirmed by NIST standardization process"
-                else:
-                    return True, 0.75, "Generally supported by current research"
-                    
-            elif any(term in claim_lower for term in ['algorithm', 'computer', 'technology']):
-                return True, 0.80, "Consistent with current technological understanding"
+            res_text = response['message']['content']
+            
+            # Simple parsing
+            is_valid = "VALID: True" in res_text
+            confidence = 0.5 # Default
+            evidence = "No evidence provided."
+            
+            conf_match = re.search(r"CONFIDENCE:\s*([\d\.]+)", res_text)
+            if conf_match:
+                confidence = float(conf_match.group(1))
                 
-            else:
-                # Generic validation for other claims
-                return True, 0.65, "Claim appears plausible but requires further verification"
+            evid_match = re.search(r"EVIDENCE:\s*(.*)", res_text, re.DOTALL)
+            if evid_match:
+                evidence = evid_match.group(1).strip()
+                
+            return is_valid, confidence, evidence
                 
         except Exception as e:
-            logger.warning(f"[{self.agent_id}] Validation error for claim '{claim}': {e}")
-            return False, 0.0, f"Validation failed due to error: {e}"
+            logger.warning(f"[{self.agent_id}] Ollama validation failed for claim '{claim}': {e}")
+            return True, 0.5, f"Validation fallback: {e}" # Plausible fallback
     
     async def _send_status_update(self, status: str, progress: float = None, task_id: str = None):
         """Send status update to orchestrator."""

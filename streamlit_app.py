@@ -265,69 +265,154 @@ def extract_summary_from_report(markdown_content: str) -> str:
 def main():
     st.set_page_config(page_title="SentinelARC Research Dashboard", layout="wide")
 
-    # Gemini-like layout styling.
-    # Note: Streamlit is not pixel-identical to Gemini.com, but this makes the UI layout/spacing closer.
+    # Modern Professional SaaS Styling
     st.markdown(
         """
         <style>
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+          
           /* Base */
-          html, body { background: #ffffff; color: #0f172a; }
+          html, body, [class*="css"] { 
+            font-family: 'Inter', sans-serif !important;
+            background-color: #f8fafc; 
+            color: #0f172a; 
+          }
 
-          /* Hide Streamlit top menu/header blocks (if present) */
+          /* Hide Streamlit top menu/header blocks */
           #MainMenu { visibility: hidden; }
           footer { visibility: hidden; }
+          header { visibility: hidden; }
 
           /* Sidebar */
+          section[data-testid="stSidebar"] {
+            background-color: #ffffff;
+            border-right: 1px solid #e2e8f0;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.02);
+          }
           section[data-testid="stSidebar"] > div:first-child {
-            background: #f3f4f6;
-            border-right: 1px solid rgba(15,23,42,0.08);
-            padding: 16px 14px;
+            padding: 24px 16px;
+          }
+          
+          /* Sidebar Buttons */
+          div[data-testid="stSidebar"] button {
+            background-color: transparent;
+            border: 1px solid transparent;
+            color: #475569;
+            font-weight: 500;
+            border-radius: 8px;
+            padding: 8px 16px;
+            transition: all 0.2s ease;
+            text-align: left;
+          }
+          div[data-testid="stSidebar"] button:hover {
+            background-color: #f1f5f9;
+            color: #0f172a;
+            border-color: #cbd5e1;
           }
 
-          .gemSidebarItem{
-            font-size: 13px;
-            color: rgba(15,23,42,0.75);
-            padding: 6px 10px;
-            border-radius: 10px;
-          }
-          .gemSidebarItem:hover{
-            background: rgba(255,255,255,0.6);
-          }
-
-          /* Center main content area like a chat */
+          /* Main content area */
           div[data-testid="stVerticalBlock"] {
-            max-width: 980px;
+            max-width: 1000px;
             margin: 0 auto;
+            padding: 0 1rem;
           }
 
-          /* Top title */
-          .geminiTitleBar {
+          /* Containers / Cards */
+          div[data-testid="stVerticalBlock"] > div > div[data-testid="stVerticalBlockBorderWrapper"] {
+            background: #ffffff;
+            border-radius: 16px;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+            padding: 24px;
+            margin-bottom: 24px;
+            transition: box-shadow 0.3s ease, transform 0.3s ease;
+          }
+          div[data-testid="stVerticalBlockBorderWrapper"]:hover {
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.05);
+            transform: translateY(-2px);
+          }
+
+          /* Primary Buttons */
+          button[kind="primary"] {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            padding: 10px 20px;
+            box-shadow: 0 4px 6px rgba(37, 99, 235, 0.2);
+            transition: all 0.2s;
+          }
+          button[kind="primary"]:hover {
+            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+            box-shadow: 0 6px 8px rgba(37, 99, 235, 0.3);
+            transform: translateY(-1px);
+          }
+          
+          /* Headers & Typography */
+          h1, h2, h3 { color: #0f172a !important; letter-spacing: -0.02em; }
+          h3 { font-size: 1.25rem; margin-bottom: 1rem; color: #1e293b; border-bottom: 2px solid #f1f5f9; padding-bottom: 0.5rem; }
+          
+          /* Chat Input */
+          div[data-testid="stChatInput"] {
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+            border: 1px solid #cbd5e1;
+            transition: all 0.3s;
+          }
+          div[data-testid="stChatInput"]:focus-within {
+            box-shadow: 0 4px 20px rgba(59, 130, 246, 0.15);
+            border-color: #3b82f6;
+          }
+
+          /* Top Header Styling */
+          .app-header {
+            background: linear-gradient(90deg, #1e293b 0%, #0f172a 100%);
+            padding: 28px 32px;
+            border-radius: 16px;
+            margin-bottom: 32px;
+            color: white;
+            box-shadow: 0 10px 25px rgba(15, 23, 42, 0.15);
             display: flex;
             align-items: center;
-            justify-content: flex-start;
-            padding: 18px 4px 10px 10px;
-            max-width: 980px;
-            margin: 0 auto;
+            justify-content: space-between;
           }
-          .geminiTitleBar h1 {
-            font-size: 20px;
-            font-weight: 700;
+          .app-header h1 {
+            color: white !important;
             margin: 0;
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
           }
-
-          /* Chat bubbles: make them flatter/cleaner */
-          .stChatMessage { border-radius: 14px; }
-          .stChatMessage .stMarkdown { font-size: 14px; }
-
-          /* Expander header tweak */
-          details summary { font-weight: 600; }
+          .app-header p {
+            margin: 4px 0 0 0;
+            color: #94a3b8;
+            font-size: 15px;
+          }
+          .status-badge {
+            background: rgba(52, 211, 153, 0.2);
+            color: #34d399;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 600;
+            border: 1px solid rgba(52, 211, 153, 0.3);
+          }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
     st.markdown(
-        "<div style='max-width:980px;margin:0 auto 14px auto;font-size:14px;font-weight:700;'>SentinelARC</div>",
+        '''
+        <div class="app-header">
+            <div>
+                <h1>SentinelARC</h1>
+                <p>Autonomous Literature Review & Fact-Checking</p>
+            </div>
+            <div class="status-badge">● System Online</div>
+        </div>
+        ''',
         unsafe_allow_html=True,
     )
 
@@ -368,12 +453,16 @@ def main():
             else:
                 if "report_choice" not in st.session_state or st.session_state["report_choice"] not in filtered:
                     st.session_state["report_choice"] = filtered[0]
+                def on_report_select():
+                    st.session_state["report_clicked"] = True
+
                 choice = st.selectbox(
                     "Report",
                     filtered,
                     index=filtered.index(st.session_state["report_choice"]),
                     key="report_choice",
                     label_visibility="collapsed",
+                    on_change=on_report_select
                 )
                 selected_path = next(p for p in files if p.name == choice)
 
@@ -383,86 +472,112 @@ def main():
         if st.session_state.get("menu_info"):
             st.caption(st.session_state["menu_info"])
 
-    # --- Main content (Gemini-like order without chat avatars) ---
-    last_query = st.session_state.get("last_query")
-    if last_query:
-        with st.container(border=True):
-            st.markdown("**You**")
-            st.markdown(last_query)
+    # --- Main content (Continuous Chat Flow) ---
+    if "chat_history" not in st.session_state:
+        st.session_state["chat_history"] = []
+    if "shown_reports" not in st.session_state:
+        st.session_state["shown_reports"] = set()
 
-    if not selected_path:
-        with st.container(border=True):
-            st.markdown("**SentinelARC**")
-            st.info("Select a report from the sidebar to view summary, paper links, and PDF downloads.")
-    else:
-        content = read_report(selected_path)
-        papers = extract_paper_links(content)
-        summary_md = extract_summary_from_report(content)
+    # Track reports that have been shown in history so we can auto-append new ones
+    current_files = list_reports()
+    
+    # Check for newly generated reports (backend saves them to disk async)
+    for f in current_files:
+        path_str = str(f)
+        if path_str not in st.session_state["shown_reports"]:
+            # If there's an active query waiting for a report, or if it's just a fresh run newly seen
+            # we append it. We'll mark it shown so it only appends once.
+            st.session_state["chat_history"].append({"type": "report", "path": path_str})
+            st.session_state["shown_reports"].add(path_str)
+            if st.session_state.get("is_researching"):
+                st.session_state["is_researching"] = False
 
-        with st.container(border=True):
-            st.caption(f"Report: `{selected_path.name}`")
+    # Allow clicking in the sidebar to manually append an old report to the end
+    # We use a unique session state flag to detect if it's a genuine click vs a default value rerun
+    if "report_clicked" in st.session_state and st.session_state["report_clicked"]:
+        if selected_path:
+            path_str = str(selected_path)
+            if not st.session_state["chat_history"] or st.session_state["chat_history"][-1].get("path") != path_str:
+                st.session_state["chat_history"].append({"type": "report", "path": path_str})
+        st.session_state["report_clicked"] = False
 
-            # 1) Summary first
-            st.markdown("### Summary")
-            if summary_md:
-                st.markdown(summary_md)
+    # Render history
+    for idx, item in enumerate(st.session_state["chat_history"]):
+        if item["type"] == "user":
+            with st.chat_message("user"):
+                st.markdown(item["content"])
+        
+        elif item["type"] == "report":
+            path = Path(item["path"])
+            if path.exists():
+                content = read_report(path)
+                papers = extract_paper_links(content)
+                summary_md = extract_summary_from_report(content)
+                
+                with st.chat_message("assistant"):
+                    with st.container(border=True):
+                        st.caption(f"Research Report: {path.name}")
+                        if summary_md:
+                            st.markdown(summary_md)
+                        
+                        if papers:
+                            # User requested maximum 5, minimum 2 papers (the agent returns 5-10 usually)
+                            display_papers = papers[:5]
+                            st.markdown("---")
+                            st.markdown(f"**Sources Found ({len(display_papers)})**")
+                            # Direct paper links for the user
+                            for p in display_papers:
+                                st.markdown(f"• [{p.get('title', 'Paper')}]({p['url']})")
+                        
+                        # In-card actions
+                        col1, col2 = st.columns([1, 1])
+                        with col1:
+                            if st.button(f"Generate PDF", key=f"gen_{idx}", use_container_width=True):
+                                pdf_bytes = build_summary_pdf_bytes(content, report_title=path.name)
+                                st.session_state[f"pdf_{idx}"] = pdf_bytes
+                                st.rerun()
+                        
+                        with col2:
+                            pdf_bytes = st.session_state.get(f"pdf_{idx}")
+                            if pdf_bytes:
+                                st.download_button(
+                                    "Download Analysis PDF",
+                                    data=pdf_bytes,
+                                    file_name=f"analysis_{path.stem}.pdf",
+                                    mime="application/pdf",
+                                    key=f"dl_{idx}",
+                                    use_container_width=True
+                                )
             else:
-                st.info("No summary section detected in this report.")
+                with st.chat_message("assistant"):
+                    st.warning(f"Report file `{path.name}` not found or still generating...")
 
-            # 2) Papers clickable next (show ALL paper links found)
-            st.markdown(f"### Papers ({len(papers)})")
-            if not papers:
-                st.info("No paper links were detected in this report.")
-            else:
-                for i, p in enumerate(papers, start=1):
-                    title = (p.get("title") or "Paper").strip()
-                    st.markdown(f"{i}. [{title}]({p['url']})")
 
-            # 3) Summary PDF last
-            st.markdown("### Summary PDF")
-
-            cache_key = selected_path.name
-            if st.session_state.get("summary_cache_key") != cache_key:
-                st.session_state["summary_cache_key"] = cache_key
-                st.session_state.pop("summary_pdf_bytes", None)
-                st.session_state.pop("summary_pdf_name", None)
-
-            generate_clicked = st.button(
-                "Generate Summary PDF",
-                help="Creates a PDF from the selected report (best-effort).",
-                use_container_width=True,
-            )
-
-            if generate_clicked:
-                with st.spinner("Generating summary PDF..."):
-                    pdf_bytes = build_summary_pdf_bytes(
-                        content,
-                        report_title=selected_path.name,
-                    )
-                    st.session_state["summary_pdf_bytes"] = pdf_bytes
-                    st.session_state["summary_pdf_name"] = f"summary_{selected_path.stem}.pdf"
-
-            pdf_bytes = st.session_state.get("summary_pdf_bytes")
-            pdf_name = st.session_state.get("summary_pdf_name", "summary.pdf")
-            if pdf_bytes:
-                st.download_button(
-                    label="Download Summary PDF",
-                    data=pdf_bytes,
-                    file_name=pdf_name,
-                    mime="application/pdf",
-                    use_container_width=True,
-                )
-            else:
-                st.info("Click 'Generate Summary PDF' to enable the download.")
+    if st.session_state.get("is_researching"):
+        with st.chat_message("assistant"):
+            with st.spinner("Researching in background (fetching and synthesizing sources)..."):
+                import time
+                time.sleep(2)
+                st.session_state["poll_count"] = st.session_state.get("poll_count", 0) + 1
+                if st.session_state["poll_count"] > 180: # Timeout after 6 minutes
+                    st.session_state["is_researching"] = False
+                    st.error("Request timed out. Check terminal logs.")
+                st.rerun()
 
     # --- Search bar / input (bottom) ---
     prompt = st.chat_input("Ask for a new research run (e.g., RAG graph impact)...")
     if prompt:
-        with st.spinner("Sending query to orchestrator..."):
+        if st.session_state.get("is_researching"):
+            st.warning("Please wait for the current research to finish!")
+        else:
             try:
-                trigger_research(prompt.strip())
-                st.session_state["last_query"] = prompt.strip()
-                st.session_state["task_status"] = "Task accepted. Select the newest report when ready."
+                # Add user message to history
+                st.session_state["chat_history"].append({"type": "user", "content": prompt.strip()})
+                
+                resp = trigger_research(prompt.strip())
+                st.toast("Agents are researching... check back in a moment.")
+                st.session_state["is_researching"] = True
+                st.session_state["poll_count"] = 0
                 st.rerun()
             except Exception as e:
                 st.error(f"Failed to start research: {e}")

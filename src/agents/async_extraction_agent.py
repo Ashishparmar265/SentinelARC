@@ -122,7 +122,14 @@ class AsyncExtractionAgent(AsyncBaseAgent, MCPClientMixin):
             content = result.get("content", "")
             word_count = result.get("word_count", 0)
             
-            logger.info(f"[{self.agent_id}] Extraction completed: {word_count} words from {url}")
+            fallback_abstract = task_data.get("fallback_abstract", "")
+            # If extraction failed (mock) or result is very short, use the abstract fallback
+            if len(content.strip()) < 100 and fallback_abstract:
+                logger.info(f"[{self.agent_id}] Extraction result too short. Using abstract fallback for {url}")
+                content = fallback_abstract
+                word_count = len(content.split())
+            
+            logger.info(f"[{self.agent_id}] Extraction completed/fallback: {word_count} words from {url}")
             
             # Send completion status
             await self._send_status_update("extraction_complete", 100.0, task_id)
@@ -134,7 +141,8 @@ class AsyncExtractionAgent(AsyncBaseAgent, MCPClientMixin):
                 "content": content,
                 "word_count": word_count,
                 "source_description": source_description,
-                "extraction_successful": True
+                "extraction_successful": True,
+                "used_fallback": len(result.get("content", "")) < 100
             }
             
             # Send extracted content to orchestrator
@@ -173,15 +181,22 @@ class AsyncExtractionAgent(AsyncBaseAgent, MCPClientMixin):
             # Send error status to orchestrator
             await self._send_error_status(error_msg, task_id)
             
-            # Send failed extraction data
+            # Use fallback abstract if extraction failed entirely
+            fallback_abstract = task_data.get("fallback_abstract", "")
+            if fallback_abstract:
+                logger.info(f"[{self.agent_id}] Extraction failed. Using fallback abstract for {url}")
+                error_msg = f"Web extraction failed, but abstract was used as fallback. Original error: {error_msg}"
+                
+            # Send failed extraction data (with fallback if available)
             failed_data = {
                 "url": url,
-                "title": f"Failed extraction from {url}",
-                "content": "",
-                "word_count": 0,
+                "title": f"Summary: {url}",
+                "content": fallback_abstract or "",
+                "word_count": len(fallback_abstract.split()) if fallback_abstract else 0,
                 "source_description": source_description,
-                "extraction_successful": False,
-                "error_message": error_msg
+                "extraction_successful": bool(fallback_abstract),
+                "error_message": error_msg,
+                "used_fallback": True
             }
             
             data_message = self.create_message(

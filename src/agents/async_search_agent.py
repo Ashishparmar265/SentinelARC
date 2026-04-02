@@ -35,18 +35,20 @@ class AsyncSearchAgent(AsyncBaseAgent):
         # Query expansion with Ollama
         logger.info(f"[{self.agent_id}] Expanding query with Ollama...")
         try:
+            system_prompt = (
+                "You are an expert academic research librarian. "
+                "Your task is to take a user's research query and expand it into a high-quality search string for Semantic Scholar. "
+                "CRITICAL: If the query contains 'RAG', it almost always refers to 'Retrieval-Augmented Generation' in Artificial Intelligence. "
+                "CRITICAL: Do NOT expand or guess the meaning of other acronyms (like LOD or XR) unless you are absolutely certain. If unsure, limit expansions to the exact original letters to avoid false positives. "
+                "Provide a search string using Boolean operators (AND, OR) and quotes for phrases. "
+                "Limit your response to ONLY the search string. No explanations."
+            )
             response = ollama.chat(
                 model='llama3.1:8b',
                 messages=[
                     {
                         'role': 'system',
-                        'content': (
-                            "You are an academic research assistant. "
-                            "Expand the user's query into a more effective search string for Semantic Scholar. "
-                            "Focus on keywords and synonyms connected with OR. "
-                            "Keep it simple and broad to avoid zero results — avoid complex AND/OR nesting. "
-                            "Output only the expanded search string, no explanation."
-                        )
+                        'content': system_prompt
                     },
                     {
                         'role': 'user',
@@ -66,9 +68,8 @@ class AsyncSearchAgent(AsyncBaseAgent):
             url = "https://api.semanticscholar.org/graph/v1/paper/search"
             params = {
                 "query": expanded_query,
-                "limit": 10,
+                "limit": 20,
                 "fields": "title,authors,year,abstract,venue,citationCount,openAccessPdf,url",
-                "sort": "citationCount:desc"
             }
 
             logger.info(f"[{self.agent_id}] Calling Semantic Scholar API...")
@@ -82,34 +83,70 @@ class AsyncSearchAgent(AsyncBaseAgent):
             else:
                 logger.info(f"[{self.agent_id}] No API key found - using unauthenticated mode (limited rate)")
 
-            response = requests.get(url, params=params, headers=headers, timeout=15)
+            import xml.etree.ElementTree as ET
 
-            if response.status_code == 429:
-                logger.warning(f"[{self.agent_id}] Rate limit hit (429). Waiting 60s before retry...")
-                await asyncio.sleep(60)
-                response = requests.get(url, params=params, headers=headers, timeout=15)
+            def fetch_arxiv(search_query: str, limit: int = 10) -> list:
+                logger.info(f"[{self.agent_id}] Attempting arXiv fallback search for: {search_query}")
+                try:
+                    arxiv_url = "http://export.arxiv.org/api/query"
+                    # simplify query for arxiv (remove complex boolean operators if they break it, but we'll try raw first)
+                    safe_query = search_query.replace('"', '').replace(' AND ', ' ').replace(' OR ', ' ')
+                    params = {"search_query": "all:" + safe_query, "start": 0, "max_results": limit}
+                    response = requests.get(arxiv_url, params=params, timeout=20)
+                    if response.status_code == 200:
+                        root = ET.fromstring(response.content)
+                        ns = {'atom': 'http://www.w3.org/2005/Atom'}
+                        fallback_papers = []
+                        for entry in root.findall('atom:entry', ns):
+                            t_el = entry.find('atom:title', ns)
+                            a_el = entry.find('atom:summary', ns)
+                            u_el = entry.find('atom:id', ns)
+                            p_el = entry.find('atom:published', ns)
+                            
+                            title = t_el.text.strip().replace('\n', ' ') if t_el is not None else "Unknown Title"
+                            abstract = a_el.text.strip().replace('\n', ' ') if a_el is not None else "No abstract"
+                            paper_url = u_el.text if u_el is not None else ""
+                            year = p_el.text[:4] if p_el is not None else "Unknown"
+                            authors = [{"name": author.find('atom:name', ns).text} for author in entry.findall('atom:author', ns)]
+                            
+                            fallback_papers.append({
+                                "title": title,
+                                "authors": authors,
+                                "year": year,
+                                "abstract": abstract,
+                                "url": paper_url,
+                                "citationCount": 0
+                            })
+                        return fallback_papers
+                except Exception as e:
+                    logger.error(f"[{self.agent_id}] arXiv fallback failed: {e}")
+                return []
 
-            if response.status_code != 200:
-                raise Exception(f"Semantic Scholar API error: {response.status_code} - {response.text}")
-
-            data = response.json()
-            papers = data.get("data", [])
+            retries = 3
+            papers = []
+            for attempt in range(retries):
+                response = requests.get(url, params=params, headers=headers, timeout=20)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    papers = data.get("data", [])
+                    break
+                elif response.status_code == 429:
+                    wait_time = (attempt + 1) * 5  # wait 5, 10, 15 seconds
+                    logger.warning(f"[{self.agent_id}] Rate limit hit (429). Retrying Semantic Scholar in {wait_time}s... (Attempt {attempt+1}/{retries})")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"Semantic Scholar API error: {response.status_code} - {response.text}")
+                    break
             
+            # If all retries failed or no papers found, use arXiv fallback
+            if not papers:
+                logger.warning(f"[{self.agent_id}] No Semantic Scholar results. Triggering arXiv fallback...")
+                papers = fetch_arxiv(query, limit=20)
+
             # Structured results list for orchestrator/extraction pipeline
             results = []
             content = "No relevant academic papers found."  # Default - always defined
-
-            if not papers:
-                logger.warning(f"[{self.agent_id}] Zero papers with expanded query. Retrying with original query...")
-                await asyncio.sleep(10)  # Delay to avoid immediate rate limit on fallback
-                params["query"] = query
-                response = requests.get(url, params=params, headers=headers, timeout=15)
-
-                if response.status_code != 200:
-                    logger.error(f"[{self.agent_id}] Fallback API call failed: {response.status_code} - {response.text}")
-                else:
-                    data = response.json()
-                    papers = data.get("data", [])
 
             # Build structured results + human-readable content if we have papers (after fallback)
             if papers:
@@ -135,6 +172,7 @@ class AsyncSearchAgent(AsyncBaseAgent):
                             "year": year,
                             "venue": paper.get("venue"),
                             "citationCount": citations,
+                            "abstract": abstract_raw,  # Include full abstract for fallback
                             # URL used by orchestrator for extraction tasks
                             "url": primary_url,
                             # Extra URLs kept for potential future use

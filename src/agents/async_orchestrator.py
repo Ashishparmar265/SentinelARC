@@ -36,10 +36,16 @@ class AsyncOrchestratorAgent(AsyncBaseAgent):
         
         # Workflow state
         self.current_query: str = ""
+        self.active_tasks = {}
+        self.search_results = []
+        self.extracted_content = []
+        self.extraction_goal = 0
+        self.fact_check_triggered = False
+        self.synthesis_triggered = False
         self.current_task_id: str = ""
-        self.search_results: List[Dict] = []
-        self.extracted_content: List[Dict] = []
         self.synthesis_report: Dict = {}
+        self.fact_check_results: Dict = {}
+        self.search_retries: int = 0
         self.workflow_start_time: datetime = None
         
         # Agent status tracking
@@ -78,6 +84,8 @@ class AsyncOrchestratorAgent(AsyncBaseAgent):
         self.search_results.clear()
         self.extracted_content.clear()
         self.synthesis_report.clear()
+        self.fact_check_results.clear()
+        self.search_retries = 0
         
         # Broadcast workflow start
         await self._broadcast_log("INFO", f"Research workflow started: '{query}'")
@@ -131,6 +139,8 @@ class AsyncOrchestratorAgent(AsyncBaseAgent):
             await self._handle_search_results(payload, sender_id)
         elif payload.data_type == "extracted_content":
             await self._handle_extracted_content(payload, sender_id)
+        elif payload.data_type == "fact_check_results":
+            await self._handle_fact_check_results(payload, sender_id)
         elif payload.data_type == "synthesis_report":
             await self._handle_synthesis_report(payload, sender_id)
         else:
@@ -157,21 +167,29 @@ class AsyncOrchestratorAgent(AsyncBaseAgent):
         
         # Assign extraction tasks for top results
         extraction_tasks = []
-        for i, result in enumerate(results[:3]):  # Extract from top 3 results
+        top_results = results[:10]
+        self.extraction_goal = len(top_results)
+        self.extracted_content = []
+        self.fact_check_triggered = False
+        self.synthesis_triggered = False
+        
+        for i, result in enumerate(top_results):
             url = result.get("url", "")
+            abstract = result.get("abstract", "")
             if url:
-                extraction_tasks.append(self._assign_extraction_task(url, f"source_{i+1}"))
+                extraction_tasks.append(self._assign_extraction_task(url, f"source_{i+1}", abstract))
         
         # Execute extraction tasks concurrently
         if extraction_tasks:
             await asyncio.gather(*extraction_tasks)
     
-    async def _assign_extraction_task(self, url: str, source_desc: str):
+    async def _assign_extraction_task(self, url: str, source_desc: str, abstract: str = ""):
         """Assign content extraction task to ExtractionAgent."""
         task_data = {
             "url": url,
             "task_id": self.current_task_id,
-            "source_description": source_desc
+            "source_description": source_desc,
+            "fallback_abstract": abstract
         }
         
         extraction_message = self.create_message(
@@ -193,12 +211,66 @@ class AsyncOrchestratorAgent(AsyncBaseAgent):
         self.extracted_content.append(content_data)
         
         content_length = content_data.get("word_count", 0)
-        logger.info(f"[{self.agent_id}] Received extracted content ({content_length} words)")
+        logger.info(f"[{self.agent_id}] Received extracted content ({content_length} words). Progress: {len(self.extracted_content)}/{self.extraction_goal}")
         
-        # If we have enough content, start synthesis
-        if len(self.extracted_content) >= 2:  # Wait for at least 2 sources
-            await self._assign_synthesis_task()
+        # Trigger fact checking when all extractions are done OR we have at least 5
+        if not self.fact_check_triggered:
+            if len(self.extracted_content) >= self.extraction_goal or len(self.extracted_content) >= 5:
+                self.fact_check_triggered = True
+                await self._assign_fact_check_task()
     
+    async def _assign_fact_check_task(self):
+        """Assign fact checking task to evaluate extracted content."""
+        combined_content = "\n\n".join([c.get("content", "")[:5000] for c in self.extracted_content if c.get("extraction_successful")])
+        
+        task_data = {
+            "source_content": combined_content,
+            "task_id": self.current_task_id
+        }
+        
+        fact_check_message = self.create_message(
+            receiver_id="fact_checker_agent",
+            msg_type=ACPMsgType.TASK_ASSIGN,
+            payload=TaskAssignPayload(
+                task_type="fact_check",
+                task_data=task_data,
+                priority=1
+            ).model_dump()
+        )
+        
+        await self.send_message(fact_check_message)
+        logger.info(f"[{self.agent_id}] Assigned fact checking task")
+
+    async def _handle_fact_check_results(self, payload: DataSubmitPayload, sender_id: str):
+        """Process fact check results and decide whether to synthesize or retry."""
+        results_data = payload.data
+        summary = results_data.get("summary", {})
+        overall_confidence = summary.get("overall_confidence", 0.0)
+        
+        logger.info(f"[{self.agent_id}] Fact check confidence score: {overall_confidence:.2f}")
+        
+        if overall_confidence < 0.70 and self.search_retries < 1:
+            logger.warning(f"[{self.agent_id}] Confidence too low ({overall_confidence:.2f}). Triggering alternate search.")
+            self.search_retries += 1
+            
+            # Broadcast retry
+            await self._broadcast_log("WARNING", f"Low confidence results ({overall_confidence:.2f}). Orchestrator is looking for better alternative sources...")
+            
+            # Clear old state and retry search with modified query
+            self.search_results.clear()
+            self.extracted_content.clear()
+            
+            alternative_query = f"{self.current_query} alternative perspectives evidence"
+            await self._assign_search_task(alternative_query)
+        else:
+            if overall_confidence < 0.70:
+                logger.warning(f"[{self.agent_id}] Confidence remains low after retries. Proceeding to synthesis anyway.")
+            else:
+                logger.info(f"[{self.agent_id}] Results validated successfully. Proceeding to synthesis.")
+                
+            self.fact_check_results = results_data
+            await self._assign_synthesis_task()
+
     async def _assign_synthesis_task(self):
         """Assign synthesis task to create the research report."""
         task_data = {

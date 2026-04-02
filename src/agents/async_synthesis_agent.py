@@ -87,8 +87,9 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
 
             # 2. Source Analysis
             await self._send_status_update("analyzing_sources", 40.0, task_id)
+            # Analyze all sources that have content (real or fallback)
             for i, content in enumerate(extracted_content):
-                if content.get("extraction_successful", False):
+                if content.get("content"):
                     section = await self._create_source_analysis(content, i + 1)
                     report_sections.append(section)
 
@@ -215,8 +216,9 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
 
     async def _create_conclusion(self, query: str, extracted_content: List[Dict]) -> str:
         """Generate synthesis and conclusions using Ollama."""
-        successful = [c for c in extracted_content if c.get("extraction_successful", False)]
-        content_snippets = "\n\n".join([c.get("content", "")[:1000] for c in successful[:3]])  # top 3 sources
+        # Use sources that have content
+        successful = [c for c in extracted_content if c.get("content")]
+        content_snippets = "\n\n".join([f"Source: {c.get('title')}\nContent: {c.get('content', '')[:1200]}" for c in successful[:5]])  # up to 5 sources
 
         try:
             response = ollama.chat(
@@ -227,6 +229,7 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
                         'content': (
                             "You are an academic synthesizer. "
                             "Write concise conclusions (200–300 words) based on the provided sources. "
+                            "You must treat the provided 'Key source excerpts' as your only context. "
                             "Include: main findings, common themes, implications, and suggested future research. "
                             "Use formal tone. Output only the conclusions text."
                         )
@@ -255,16 +258,21 @@ This report was generated through:
 4. Structured formatting into Markdown report"""
 
     async def _create_metadata(self, search_results: List[Dict], extracted_content: List[Dict]) -> str:
-        successful = [c for c in extracted_content if c.get("extraction_successful", False)]
+        # Use all results that have some content (either real extraction or fallback abstract)
+        successful = [c for c in extracted_content if c.get("content")]
         total_words = sum(len(c.get("content", "").split()) for c in successful)
+        
+        # Format sources with the bullet point character '•' that the dashboard expects
         source_list = "\n".join([f"• [{c.get('title', 'Untitled')}]({c.get('url', '#')})" for c in successful])
 
         return f"""**Research Statistics**:
 - Sources Analyzed: {len(successful)}
-- Total Words Extracted: {total_words:,}
-- Search Results: {len(search_results)}
+- Total Words Processed: {total_words:,}
+- Search Results Found: {len(search_results)}
+
 **Sources**:
 {source_list}
+
 **Generation Date**: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')} IST"""
 
     async def _send_status_update(self, status: str, progress: float = None, task_id: str = None):
