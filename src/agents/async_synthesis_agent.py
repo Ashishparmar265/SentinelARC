@@ -215,37 +215,74 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
         return f"## Source {index}: {title}\n\n[Link]({url})\n\n{analysis}"
 
     async def _create_conclusion(self, query: str, extracted_content: List[Dict]) -> str:
-        """Generate synthesis and conclusions using Ollama."""
-        # Use sources that have content
+        """Generate synthesis using a Multi-Hop RAG framework."""
         successful = [c for c in extracted_content if c.get("content")]
         content_snippets = "\n\n".join([f"Source: {c.get('title')}\nContent: {c.get('content', '')[:1200]}" for c in successful[:5]])  # up to 5 sources
-
+        
         try:
-            response = ollama.chat(
+            # HOP 1: Decompose query
+            decomposition_response = await asyncio.to_thread(
+                ollama.chat,
+                model='llama3.1:8b',
+                messages=[{
+                    'role': 'system',
+                    'content': 'You are a research question composer. Break down the user question into exactly 3 modular sub-questions that need to be answered to fully resolve the prompt. Return them on separate lines starting with a dash. No conversational fluff.'
+                }, {
+                    'role': 'user',
+                    'content': query
+                }]
+            )
+            sub_questions = [q.strip("- ") for q in decomposition_response['message']['content'].strip().split("\n") if q.strip()]
+            logger.info(f"[{self.agent_id}] Multi-Hop RAG Decomposed: {sub_questions}")
+
+            # HOP 2: Iterative Answering
+            sub_answers = []
+            for i, sub_q in enumerate(sub_questions[:3]):
+                ans_resp = await asyncio.to_thread(
+                    ollama.chat,
+                    model='llama3.1:8b',
+                    messages=[{
+                        'role': 'system',
+                        'content': f"You are a tight-scoped data analyst. Answer the sub-question based ONLY on the excerpts below. If not found, output 'Not enough data'.\n\nEXCERPTS:\n{content_snippets}"
+                    }, {
+                        'role': 'user',
+                        'content': sub_q
+                    }],
+                    options={'temperature': 0.1}
+                )
+                sub_answers.append(f"**{sub_q}**\n{ans_resp['message']['content'].strip()}")
+            
+            # HOP 3: Unification
+            combined_context = "\n\n".join(sub_answers)
+            response = await asyncio.to_thread(
+                ollama.chat,
                 model='llama3.1:8b',
                 messages=[
                     {
                         'role': 'system',
                         'content': (
                             "You are an academic synthesizer. "
-                            "Write concise conclusions (200–300 words) based on the provided sources. "
-                            "You must treat the provided 'Key source excerpts' as your only context. "
-                            "Include: main findings, common themes, implications, and suggested future research. "
-                            "Use formal tone. Output only the conclusions text."
+                            "Write concise conclusions (250–350 words) bridging the provided multi-hop data points. "
+                            "Include: main findings, synthesis of sub-questions, and suggested future research. "
+                            "Use a highly formal academic tone."
                         )
                     },
                     {
                         'role': 'user',
-                        'content': f"Research question: {query}\n\nKey source excerpts:\n{content_snippets}"
+                        'content': f"Core Research Question: {query}\n\nMulti-Hop Answers:\n{combined_context}"
                     }
                 ],
                 options={'temperature': 0.4}
             )
             conclusion = response['message']['content'].strip()
-            logger.info(f"[{self.agent_id}] Conclusion generated ({len(conclusion.split())} words)")
-            return conclusion
+            
+            # Append the decomposed roadmap to the conclusion for visibility
+            final_output = f"{conclusion}\n\n### RAG Sub-Query Traces\n*The orchestrator decomposed your prompt to query the texts on these highly-focused vectors:*\n\n" + "\n\n".join([f"- {sq}" for sq in sub_answers])
+            
+            logger.info(f"[{self.agent_id}] Multi-Hop Conclusion generated ({len(final_output.split())} words)")
+            return final_output
         except Exception as e:
-            logger.warning(f"[{self.agent_id}] Ollama conclusion failed: {e}")
+            logger.warning(f"[{self.agent_id}] Ollama Multi-Hop conclusion failed: {e}")
             return f"Based on {len(successful)} sources, this report highlights key trends in '{query}'. Further research is recommended."
 
     # Keep these static sections unchanged

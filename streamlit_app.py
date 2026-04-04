@@ -7,27 +7,111 @@ from typing import Dict, List
 import requests
 import streamlit as st
 
+from src.database import SessionLocal, User, Report, init_db
+from src.session_utils import create_session, verify_session, delete_session
+
+# Initialize database tables
+init_db()
 
 API_URL = os.getenv("SYNAPSE_API_URL", "http://localhost:8000")
 REPORTS_DIR = Path("output/reports")
 
+def show_login_page():
+    st.markdown("<h1 style='text-align: center; margin-top: 50px;'>SentinelARC Login</h1>", unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        tab_login, tab_register = st.tabs(["Login", "Register"])
+        
+        with tab_login:
+            with st.form("login_form"):
+                st.subheader("Login")
+                username = st.text_input("Username").strip()
+                password = st.text_input("Password", type="password")
+                remember_me = st.checkbox("Keep me logged in")
+                submit = st.form_submit_button("Login", use_container_width=True)
+                
+                if submit:
+                    if not username or not password:
+                        st.error("Please enter both username and password.")
+                    else:
+                        db = SessionLocal()
+                        user = db.query(User).filter(User.username == username).first()
+                        db.close()
+                        if user and user.verify_password(password):
+                            st.session_state["authenticated"] = True
+                            st.session_state["user_id"] = user.id
+                            st.session_state["username"] = user.username
+                            
+                            if remember_me:
+                                token = create_session(user.id)
+                                st.query_params["session"] = token
+                                
+                            st.success("Login successful!")
+                            st.rerun()
+                        else:
+                            st.error("Invalid username or password.")
+                            
+        with tab_register:
+            with st.form("register_form"):
+                st.subheader("Create a New Profile")
+                reg_username = st.text_input("Choose Username").strip()
+                reg_password = st.text_input("Choose Password", type="password")
+                reg_submit = st.form_submit_button("Register", use_container_width=True)
+                
+                if reg_submit:
+                    if not reg_username or not reg_password:
+                        st.error("Please fill out all fields.")
+                    else:
+                        db = SessionLocal()
+                        existing = db.query(User).filter(User.username == reg_username).first()
+                        if existing:
+                            st.error("Username already taken. Please choose another.")
+                        else:
+                            new_user = User(
+                                username=reg_username, 
+                                password_hash=User.hash_password(reg_password)
+                            )
+                            db.add(new_user)
+                            db.commit()
+                            db.refresh(new_user)
+                            st.success("Account created! You can now login.")
+                        db.close()
 
-def trigger_research(query: str) -> dict:
+
+
+def trigger_research(query: str, user_id: int) -> dict:
     """Call the FastAPI /research endpoint."""
-    payload = {"query": query}
+    payload = {"query": query, "user_id": user_id}
     # Short connect timeout, no read timeout (request returns immediately anyway)
     resp = requests.post(f"{API_URL}/research", json=payload, timeout=(5, None))
     resp.raise_for_status()
     return resp.json()
 
+def trigger_general_ai(query: str, model: str, chat_history: list, user_id: int) -> str:
+    """Call the FastAPI /general_chat endpoint."""
+    payload = {
+        "query": query,
+        "model": model,
+        "history": chat_history,
+        "user_id": user_id
+    }
+    resp = requests.post(f"{API_URL}/general_chat", json=payload, timeout=(5, 120))
+    resp.raise_for_status()
+    return resp.json().get("response", "Error: No response generated.")
 
-def list_reports():
+
+def list_reports(user_id: int):
     """Return report files sorted by modified time (newest first)."""
-    if not REPORTS_DIR.exists():
+    if not user_id:
+        return []
+        
+    user_dir = REPORTS_DIR / str(user_id)
+    if not user_dir.exists():
         return []
 
     files = sorted(
-        REPORTS_DIR.glob("research_report_*.md"),
+        user_dir.glob("research_report_*.md"),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
@@ -265,6 +349,16 @@ def extract_summary_from_report(markdown_content: str) -> str:
 def main():
     st.set_page_config(page_title="SentinelARC Research Dashboard", layout="wide")
 
+    # Check for existing session in query params
+    if not st.session_state.get("authenticated"):
+        session_token = st.query_params.get("session")
+        if session_token:
+            user_info = verify_session(session_token)
+            if user_info:
+                st.session_state["authenticated"] = True
+                st.session_state["user_id"] = user_info["id"]
+                st.session_state["username"] = user_info["username"]
+
     # Modern Professional SaaS Styling
     st.markdown(
         """
@@ -403,6 +497,48 @@ def main():
         unsafe_allow_html=True,
     )
 
+    # Search Bar Spinner UI (Phase 2: UI Aesthetics)
+    if st.session_state.get("is_researching"):
+        st.markdown(
+            """
+            <style>
+              /* Target the submit button icon */
+              [data-testid="stChatInputSubmit"] svg {
+                display: none !important;
+              }
+              /* Create the rotating ring */
+              [data-testid="stChatInputSubmit"]::after {
+                content: "";
+                display: block;
+                width: 18px;
+                height: 18px;
+                border: 2px solid #cbd5e1;
+                border-top-color: #3b82f6;
+                border-radius: 50%;
+                animation: gear-spin 0.8s linear infinite;
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+              }
+              @keyframes gear-spin {
+                from { transform: translate(-50%, -50%) rotate(0deg); }
+                to { transform: translate(-50%, -50%) rotate(360deg); }
+              }
+              /* Force visibility and disable interaction while processing */
+              [data-testid="stChatInputSubmit"] {
+                display: flex !important;
+                visibility: visible !important;
+                opacity: 1 !important;
+                background-color: transparent !important;
+                border: none !important;
+                pointer-events: none;
+              }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+
     st.markdown(
         '''
         <div class="app-header">
@@ -416,9 +552,24 @@ def main():
         unsafe_allow_html=True,
     )
 
+    if not st.session_state.get("authenticated"):
+        show_login_page()
+        return
+
     # --- Sidebar: menu (clickable) + report picker with search ---
     selected_path = None
     with st.sidebar:
+        st.markdown(f"#### Welcome, {st.session_state.get('username', 'User')}!")
+        if st.button("Logout", use_container_width=True):
+            session_token = st.query_params.get("session")
+            if session_token:
+                delete_session(session_token)
+                st.query_params.clear()
+            st.session_state["authenticated"] = False
+            st.session_state["user_id"] = None
+            st.session_state["username"] = None
+            st.rerun()
+
         st.markdown("#### Menu")
         if st.button("+ New chat", use_container_width=True, key="btn_new_chat"):
             st.session_state["last_query"] = ""
@@ -438,7 +589,7 @@ def main():
         st.markdown("#### Chats")
 
         report_search = st.text_input("Search reports", placeholder="Type to filter...", key="report_search")
-        files = list_reports()
+        files = list_reports(st.session_state.get("user_id"))
         if not files:
             st.info("No reports yet.")
         else:
@@ -472,25 +623,55 @@ def main():
         if st.session_state.get("menu_info"):
             st.caption(st.session_state["menu_info"])
 
-    # --- Main content (Continuous Chat Flow) ---
+    # --- Main content: Command Center (Prominent UI) ---
+    st.markdown("### 🛠️ Control Center")
+    with st.container(border=True):
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            mode = st.radio("**Select Intelligence Mode**", ["Research AI (Deep Swarm Analysis) 🔎", "General AI (Instant Chat) 🤖"], 
+                            index=0 if st.session_state.get("mode") != "General AI (Instant Chat) 🤖" else 1,
+                            horizontal=True)
+            st.session_state["mode"] = "General AI" if "General AI" in mode else "Research AI"
+        with col2:
+            if "General AI" in mode:
+                st.session_state["ai_model"] = st.selectbox("**Select Model**", ["llama3.1:8b", "mistral", "qwen2.5-coder"])
+            else:
+                st.markdown("<p style='padding-top: 10px; color: #64748b;'>Research Mode uses the autonomous Multi-Agent Swarm for fact-checked literature review.</p>", unsafe_allow_html=True)
+
+    # --- Main content: Chat History Management ---
     if "chat_history" not in st.session_state:
         st.session_state["chat_history"] = []
+        # Populate history from database on first visit
+        from src.database import SessionLocal, User, Report
+        db = SessionLocal()
+        reports = db.query(Report).filter(Report.user_id == st.session_state["user_id"]).order_by(Report.created_at.asc()).all()
+        for r in reports:
+            st.session_state["chat_history"].append({"type": "user", "content": f"Research: {r.query}"})
+            st.session_state["chat_history"].append({"type": "report", "path": r.file_path})
+        db.close()
+        
     if "shown_reports" not in st.session_state:
-        st.session_state["shown_reports"] = set()
+        st.session_state["shown_reports"] = {item.get("path") for item in st.session_state["chat_history"] if item.get("path")}
 
     # Track reports that have been shown in history so we can auto-append new ones
-    current_files = list_reports()
+    from src.database import SessionLocal, Report
+    db = SessionLocal()
+    current_reports = db.query(Report).filter(Report.user_id == st.session_state["user_id"]).all()
+    db.close()
     
-    # Check for newly generated reports (backend saves them to disk async)
-    for f in current_files:
-        path_str = str(f)
-        if path_str not in st.session_state["shown_reports"]:
-            # If there's an active query waiting for a report, or if it's just a fresh run newly seen
-            # we append it. We'll mark it shown so it only appends once.
-            st.session_state["chat_history"].append({"type": "report", "path": path_str})
-            st.session_state["shown_reports"].add(path_str)
+    new_report_found = False
+    for r in current_reports:
+        if r.file_path not in st.session_state["shown_reports"]:
+            # Only append if it's not already in history (to avoid duplicates on refresh)
+            st.session_state["chat_history"].append({"type": "report", "path": r.file_path})
+            st.session_state["shown_reports"].add(r.file_path)
+            new_report_found = True
             if st.session_state.get("is_researching"):
                 st.session_state["is_researching"] = False
+                st.toast("Research complete! Scroll down to see the results.")
+
+    if new_report_found:
+        st.rerun()
 
     # Allow clicking in the sidebar to manually append an old report to the end
     # We use a unique session state flag to detect if it's a genuine click vs a default value rerun
@@ -505,6 +686,10 @@ def main():
     for idx, item in enumerate(st.session_state["chat_history"]):
         if item["type"] == "user":
             with st.chat_message("user"):
+                st.markdown(item["content"])
+                
+        elif item["type"] == "assistant":
+            with st.chat_message("assistant"):
                 st.markdown(item["content"])
         
         elif item["type"] == "report":
@@ -559,28 +744,42 @@ def main():
                 import time
                 time.sleep(2)
                 st.session_state["poll_count"] = st.session_state.get("poll_count", 0) + 1
-                if st.session_state["poll_count"] > 180: # Timeout after 6 minutes
+                if st.session_state["poll_count"] > 900: # Timeout after 30 minutes
                     st.session_state["is_researching"] = False
                     st.error("Request timed out. Check terminal logs.")
                 st.rerun()
 
     # --- Search bar / input (bottom) ---
-    prompt = st.chat_input("Ask for a new research run (e.g., RAG graph impact)...")
+    prompt = st.chat_input("Message SentinelARC...")
     if prompt:
-        if st.session_state.get("is_researching"):
-            st.warning("Please wait for the current research to finish!")
-        else:
+        # Add user message to history
+        st.session_state["chat_history"].append({"type": "user", "content": prompt.strip()})
+        
+        if st.session_state.get("mode") == "General AI":
             try:
-                # Add user message to history
-                st.session_state["chat_history"].append({"type": "user", "content": prompt.strip()})
-                
-                resp = trigger_research(prompt.strip())
-                st.toast("Agents are researching... check back in a moment.")
-                st.session_state["is_researching"] = True
-                st.session_state["poll_count"] = 0
+                with st.spinner("Generating..."):
+                    resp = trigger_general_ai(
+                        prompt.strip(),
+                        st.session_state.get("ai_model", "llama3.1:8b"),
+                        st.session_state["chat_history"],
+                        st.session_state.get("user_id")
+                    )
+                st.session_state["chat_history"].append({"type": "assistant", "content": resp})
                 st.rerun()
             except Exception as e:
-                st.error(f"Failed to start research: {e}")
+                st.error(f"General AI request failed: {e}")
+        else:
+            if st.session_state.get("is_researching"):
+                st.warning("Please wait for the current research to finish!")
+            else:
+                try:
+                    resp = trigger_research(prompt.strip(), st.session_state.get("user_id"))
+                    st.toast("Agents are researching... check back in a moment.")
+                    st.session_state["is_researching"] = True
+                    st.session_state["poll_count"] = 0
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to start research: {e}")
 
 
 if __name__ == "__main__":

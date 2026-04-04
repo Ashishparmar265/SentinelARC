@@ -1,0 +1,12 @@
+mcp
+aiohttp
+requests
+pydantic
+pydantic-settings
+python-dotenv
+fastapi
+uvicorn[standard]
+sse-starlette
+prometheus-fastapi-instrumentator
+orjson
+aiofiles

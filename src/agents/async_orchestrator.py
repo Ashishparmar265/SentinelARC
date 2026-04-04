@@ -66,17 +66,19 @@ class AsyncOrchestratorAgent(AsyncBaseAgent):
         except Exception as e:
             logger.error(f"[{self.agent_id}] Error handling message: {e}")
     
-    async def start_research(self, query: str):
+    async def start_research(self, query: str, user_id: int):
         """
         Initiate a research workflow for the given query.
         
         Args:
             query: Research question to investigate
+            user_id: The authenticated user initiating the request
         """
         logger.info(f"[{self.agent_id}] Starting research workflow: '{query}'")
         
         # Initialize workflow state
         self.current_query = query
+        self.user_id = user_id
         self.current_task_id = generate_task_id()
         self.workflow_start_time = datetime.now()
         
@@ -86,18 +88,20 @@ class AsyncOrchestratorAgent(AsyncBaseAgent):
         self.synthesis_report.clear()
         self.fact_check_results.clear()
         self.search_retries = 0
+        self.citation_pass_done = False
         
         # Broadcast workflow start
         await self._broadcast_log("INFO", f"Research workflow started: '{query}'")
         
         # Start with web search
-        await self._assign_search_task(query)
+        await self._assign_search_task(query, user_id)
     
-    async def _assign_search_task(self, query: str):
+    async def _assign_search_task(self, query: str, user_id: int):
         """Assign web search task to SearchAgent."""
         task_data = {
             "query": query,
             "task_id": self.current_task_id,
+            "user_id": user_id,
             "max_results": 5
         }
         
@@ -246,8 +250,28 @@ class AsyncOrchestratorAgent(AsyncBaseAgent):
         results_data = payload.data
         summary = results_data.get("summary", {})
         overall_confidence = summary.get("overall_confidence", 0.0)
-        
         logger.info(f"[{self.agent_id}] Fact check confidence score: {overall_confidence:.2f}")
+        
+        # Phase 4: Recursive Citation Mapping
+        if not getattr(self, "citation_pass_done", False):
+            self.citation_pass_done = True
+            highly_cited = sorted(self.search_results, key=lambda x: x.get('citationCount', 0) or 0, reverse=True)
+            if highly_cited and highly_cited[0].get('citationCount', 0) > 10:
+                anchor = highly_cited[0]
+                logger.info(f"[{self.agent_id}] Found highly-cited anchor (Citations: {anchor.get('citationCount')}). Triggering recursive map...")
+                await self._broadcast_log("INFO", f"Anchor paper discovered: {anchor.get('title')}. Executing recursive deep-dive pass...")
+                
+                # retain the strong anchor extraction
+                anchor_extracts = [c for c in self.extracted_content if c.get('url') == anchor.get('url')]
+                self.search_results.clear()
+                self.extracted_content.clear()
+                if anchor_extracts:
+                    self.extracted_content.extend(anchor_extracts)
+                    
+                self.fact_check_triggered = False
+                recursive_query = f"'{anchor.get('title')}' AND ({self.current_query})"
+                await self._assign_search_task(recursive_query, self.user_id)
+                return
         
         if overall_confidence < 0.70 and self.search_retries < 1:
             logger.warning(f"[{self.agent_id}] Confidence too low ({overall_confidence:.2f}). Triggering alternate search.")
@@ -261,7 +285,8 @@ class AsyncOrchestratorAgent(AsyncBaseAgent):
             self.extracted_content.clear()
             
             alternative_query = f"{self.current_query} alternative perspectives evidence"
-            await self._assign_search_task(alternative_query)
+            self.citation_pass_done = True # skip recursive search on fail-recovery
+            await self._assign_search_task(alternative_query, self.user_id)
         else:
             if overall_confidence < 0.70:
                 logger.warning(f"[{self.agent_id}] Confidence remains low after retries. Proceeding to synthesis anyway.")
@@ -308,12 +333,14 @@ class AsyncOrchestratorAgent(AsyncBaseAgent):
         """Assign file save task to persist the final report."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"research_report_{timestamp}.md"
-        file_path = f"output/reports/{filename}"
+        user_id = getattr(self, "user_id", 0)
+        file_path = f"output/reports/{user_id}/{filename}"
         
         task_data = {
             "file_path": file_path,
             "content": report_data.get("report_content", ""),
-            "task_id": self.current_task_id
+            "task_id": self.current_task_id,
+            "user_id": getattr(self, "user_id", 0)
         }
         
         save_message = self.create_message(
@@ -342,7 +369,7 @@ class AsyncOrchestratorAgent(AsyncBaseAgent):
         if "search" in agent_id and len(self.search_results) == 0:
             logger.info(f"[{self.agent_id}] Retrying search task due to failure")
             await asyncio.sleep(5)  # Wait before retry
-            await self._assign_search_task(self.current_query)
+            await self._assign_search_task(self.current_query, getattr(self, "user_id", 0))
     
     async def _broadcast_log(self, level: str, message: str):
         """Broadcast log message to all subscribers."""

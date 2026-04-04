@@ -1,5 +1,11 @@
+# Use official Ollama image to copy the binary
+FROM ollama/ollama:latest AS ollama-source
+
 # Use official Python slim base (minimal but sufficient)
 FROM python:3.11-slim AS base
+
+# Copy Ollama binary from official image
+COPY --from=ollama-source /usr/bin/ollama /usr/local/bin/ollama
 
 # Set working directory
 WORKDIR /app
@@ -47,7 +53,7 @@ RUN npm install -g playwright \
     && playwright install --with-deps chromium
 
 # Copy and install Python dependencies
-COPY requirements.txt .
+COPY docker/requirements-agents.txt ./requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
@@ -69,8 +75,6 @@ EXPOSE 8000
 RUN apt-get update && apt-get install -y zstd && rm -rf /var/lib/apt/lists/*
 
 # Install Ollama
-RUN curl -fsSL https://ollama.com/install.sh | sh
-
 # Pull model during build (server starts temporarily, pulls, then stops)
 RUN ollama serve & sleep 10 && ollama pull llama3.1:8b && pkill ollama
 

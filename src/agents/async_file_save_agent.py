@@ -121,6 +121,23 @@ class AsyncFileSaveAgent(AsyncBaseAgent, MCPClientMixin):
             if success:
                 logger.info(f"[{self.agent_id}] File saved successfully: {saved_path} ({bytes_written} bytes)")
                 
+                # Update database with report info
+                from ..database import SessionLocal, Report
+                db = SessionLocal()
+                try:
+                    new_report = Report(
+                        user_id=task_data.get("user_id", 0),
+                        file_path=saved_path,
+                        query=task_data.get("query", "Unknown Research Query")
+                    )
+                    db.add(new_report)
+                    db.commit()
+                    logger.info(f"[{self.agent_id}] Report metadata saved to database for user {new_report.user_id}")
+                except Exception as db_err:
+                    logger.error(f"[{self.agent_id}] Database error saving report: {db_err}")
+                finally:
+                    db.close()
+                
                 # Send completion status
                 await self._send_status_update("file_save_complete", 100.0, task_id)
                 

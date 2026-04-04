@@ -65,84 +65,145 @@ class AsyncSearchAgent(AsyncBaseAgent):
             expanded_query = query
 
         try:
-            url = "https://api.semanticscholar.org/graph/v1/paper/search"
-            params = {
-                "query": expanded_query,
-                "limit": 20,
-                "fields": "title,authors,year,abstract,venue,citationCount,openAccessPdf,url",
-            }
-
-            logger.info(f"[{self.agent_id}] Calling Semantic Scholar API...")
-
-            # Use API key if available in .env
-            headers = {}
-            api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
-            if api_key:
-                headers["x-api-key"] = api_key
-                logger.info(f"[{self.agent_id}] Using Semantic Scholar API key")
-            else:
-                logger.info(f"[{self.agent_id}] No API key found - using unauthenticated mode (limited rate)")
-
             import xml.etree.ElementTree as ET
 
-            def fetch_arxiv(search_query: str, limit: int = 10) -> list:
-                logger.info(f"[{self.agent_id}] Attempting arXiv fallback search for: {search_query}")
+            async def fetch_semantic_scholar_async(search_query: str, limit: int = 10) -> list:
+                logger.info(f"[{self.agent_id}] Attempting Semantic Scholar fetch")
+                url = "https://api.semanticscholar.org/graph/v1/paper/search"
+                params = {"query": search_query, "limit": limit, "fields": "title,authors,year,abstract,venue,citationCount,openAccessPdf,url"}
+                headers = {}
+                api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
+                if api_key: headers["x-api-key"] = api_key
+                
+                for attempt in range(3):
+                    try:
+                        resp = await asyncio.to_thread(requests.get, url, params=params, headers=headers, timeout=15)
+                        if resp.status_code == 200:
+                            return resp.json().get("data", [])
+                        elif resp.status_code == 429:
+                            await asyncio.sleep((attempt + 1) * 3)
+                        else:
+                            break
+                    except:
+                        pass
+                return []
+
+            def fetch_arxiv_sync(search_query: str, limit: int = 10) -> list:
+                logger.info(f"[{self.agent_id}] Attempting arXiv fetch")
                 try:
-                    arxiv_url = "http://export.arxiv.org/api/query"
-                    # simplify query for arxiv (remove complex boolean operators if they break it, but we'll try raw first)
                     safe_query = search_query.replace('"', '').replace(' AND ', ' ').replace(' OR ', ' ')
                     params = {"search_query": "all:" + safe_query, "start": 0, "max_results": limit}
-                    response = requests.get(arxiv_url, params=params, timeout=20)
+                    response = requests.get("http://export.arxiv.org/api/query", params=params, timeout=15)
                     if response.status_code == 200:
-                        root = ET.fromstring(response.content)
                         ns = {'atom': 'http://www.w3.org/2005/Atom'}
-                        fallback_papers = []
+                        root = ET.fromstring(response.content)
+                        papers = []
                         for entry in root.findall('atom:entry', ns):
                             t_el = entry.find('atom:title', ns)
                             a_el = entry.find('atom:summary', ns)
                             u_el = entry.find('atom:id', ns)
                             p_el = entry.find('atom:published', ns)
                             
-                            title = t_el.text.strip().replace('\n', ' ') if t_el is not None else "Unknown Title"
-                            abstract = a_el.text.strip().replace('\n', ' ') if a_el is not None else "No abstract"
-                            paper_url = u_el.text if u_el is not None else ""
-                            year = p_el.text[:4] if p_el is not None else "Unknown"
-                            authors = [{"name": author.find('atom:name', ns).text} for author in entry.findall('atom:author', ns)]
-                            
-                            fallback_papers.append({
-                                "title": title,
-                                "authors": authors,
-                                "year": year,
-                                "abstract": abstract,
-                                "url": paper_url,
+                            papers.append({
+                                "title": t_el.text.strip().replace('\n', ' ') if t_el is not None else "Unknown Title",
+                                "authors": [{"name": author.find('atom:name', ns).text} for author in entry.findall('atom:author', ns)],
+                                "year": p_el.text[:4] if p_el is not None else "Unknown",
+                                "abstract": a_el.text.strip().replace('\n', ' ') if a_el is not None else "No abstract",
+                                "url": u_el.text if u_el is not None else "",
                                 "citationCount": 0
                             })
-                        return fallback_papers
+                        return papers
                 except Exception as e:
-                    logger.error(f"[{self.agent_id}] arXiv fallback failed: {e}")
+                    logger.error(f"[{self.agent_id}] arXiv fetch failed: {e}")
                 return []
 
-            retries = 3
-            papers = []
-            for attempt in range(retries):
-                response = requests.get(url, params=params, headers=headers, timeout=20)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    papers = data.get("data", [])
-                    break
-                elif response.status_code == 429:
-                    wait_time = (attempt + 1) * 5  # wait 5, 10, 15 seconds
-                    logger.warning(f"[{self.agent_id}] Rate limit hit (429). Retrying Semantic Scholar in {wait_time}s... (Attempt {attempt+1}/{retries})")
-                    await asyncio.sleep(wait_time)
-                else:
-                    logger.error(f"Semantic Scholar API error: {response.status_code} - {response.text}")
-                    break
+            def fetch_pubmed_sync(search_query: str, limit: int = 5) -> list:
+                logger.info(f"[{self.agent_id}] Attempting PubMed fetch")
+                try:
+                    safe_query = search_query.replace('"', '').replace(' AND ', ' ').replace(' OR ', ' ')
+                    url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+                    resp1 = requests.get(url, params={"db": "pubmed", "term": safe_query, "retmax": limit, "retmode": "json"}, timeout=10)
+                    if resp1.status_code == 200:
+                        id_list = resp1.json().get("esearchresult", {}).get("idlist", [])
+                        if not id_list: return []
+                        
+                        resp2 = requests.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi", 
+                                             params={"db": "pubmed", "id": ",".join(id_list), "retmode": "json"}, timeout=10)
+                        if resp2.status_code == 200:
+                            results = resp2.json().get("result", {})
+                            papers = []
+                            for p_id in id_list:
+                                p = results.get(p_id, {})
+                                title = p.get("title", "Unknown Title")
+                                papers.append({
+                                    "title": title,
+                                    "authors": [{"name": au.get("name", "Unknown")} for au in p.get("authors", [])],
+                                    "year": p.get("pubdate", "")[:4],
+                                    "abstract": f"Abstract available at link. {title}",
+                                    "url": f"https://pubmed.ncbi.nlm.nih.gov/{p_id}/",
+                                    "citationCount": 0
+                                })
+                            return papers
+                except Exception as e:
+                    logger.error(f"[{self.agent_id}] PubMed fetch failed: {e}")
+                return []
+
+            # Execute parallel multi-source gathering
+            logger.info(f"[{self.agent_id}] Executing Multi-Source Parallel Fetch...")
+            semantic_task = fetch_semantic_scholar_async(expanded_query, limit=15)
+            arxiv_task = asyncio.to_thread(fetch_arxiv_sync, expanded_query, limit=10)
+            pubmed_task = asyncio.to_thread(fetch_pubmed_sync, expanded_query, limit=5)
             
-            # If all retries failed or no papers found, use arXiv fallback
-            if not papers:
-                logger.warning(f"[{self.agent_id}] No Semantic Scholar results. Triggering arXiv fallback...")
-                papers = fetch_arxiv(query, limit=20)
+            results_tuple = await asyncio.gather(semantic_task, arxiv_task, pubmed_task, return_exceptions=True)
+            
+            papers = []
+            seen_titles = set()
+            
+            for result_list in results_tuple:
+                if isinstance(result_list, list):
+                    for paper in result_list:
+                        raw_title = paper.get("title", "").strip().lower()
+                        if raw_title and raw_title not in seen_titles:
+                            seen_titles.add(raw_title)
+                            papers.append(paper)
+                            
+            # --- PHASE 2: CROSS-ENCODER RERANKING ---
+            if len(papers) > 0:
+                logger.info(f"[{self.agent_id}] Reranking {len(papers)} papers using Llama 3.1...")
+                try:
+                    paper_snippets = ""
+                    for i, p in enumerate(papers):
+                        title = p.get('title', '')
+                        abstract_text = str(p.get('abstract', ''))[:200]
+                        paper_snippets += f"[{i}] {title}\n{abstract_text}\n\n"
+                    
+                    rerank_prompt = (
+                        f"You are a strict academic reviewer evaluating papers for this query: '{query}'\n"
+                        "Below is a list of papers with an index ID. Output ONLY a valid JSON array of integer IDs for papers "
+                        "that are highly relevant. Exclude papers with mismatched acronyms or irrelevant domains.\n"
+                        "Example output: [0, 3, 5]\n\n"
+                        f"{paper_snippets}"
+                    )
+                    
+                    rerank_response = await asyncio.to_thread(
+                        ollama.chat,
+                        model='llama3.1:8b',
+                        messages=[{'role': 'user', 'content': rerank_prompt}],
+                        options={'temperature': 0.1}
+                    )
+                    import json, re
+                    content_str = rerank_response['message']['content']
+                    match = re.search(r'\[[\d,\s]*\]', content_str)
+                    if match:
+                        relevant_indices = json.loads(match.group(0))
+                        filtered_papers = [papers[i] for i in relevant_indices if i < len(papers)]
+                        if filtered_papers:
+                            papers = filtered_papers
+                            logger.info(f"[{self.agent_id}] Reranking filtered papers down to {len(papers)} highly relevant matches.")
+                        else:
+                            logger.warning(f"[{self.agent_id}] Reranking returned 0 matches, ignoring filter.")
+                except Exception as e:
+                    logger.warning(f"[{self.agent_id}] Cross-Encoder Reranking failed: {e}. Passing raw papers.")
 
             # Structured results list for orchestrator/extraction pipeline
             results = []

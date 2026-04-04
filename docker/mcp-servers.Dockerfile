@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy requirements and install Python dependencies
-COPY requirements.txt .
+COPY docker/requirements-mcp.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy source code

@@ -38,7 +38,14 @@ state = {
 
 class ResearchRequest(BaseModel):
     query: str
+    user_id: int
     task_id: str = "default_task"
+
+class GeneralChatRequest(BaseModel):
+    query: str
+    model: str
+    history: List[Dict[str, str]]
+    user_id: int
 
 logging.basicConfig(
     level=logging.INFO,
@@ -109,14 +116,40 @@ async def start_research(request: ResearchRequest, background_tasks: BackgroundT
     if not state["orchestrator"]:
         raise HTTPException(status_code=503, detail="System initializing, please wait...")
     
-    logger.info(f"📥 Received Research Request: {request.query}")
-    background_tasks.add_task(state["orchestrator"].start_research, request.query)
+    logger.info(f"📥 Received Research Request: {request.query} from User {request.user_id}")
+    background_tasks.add_task(state["orchestrator"].start_research, request.query, request.user_id)
     
     return {
         "status": "task_received",
         "task_id": request.task_id,
         "query": request.query
     }
+
+@app.post("/general_chat")
+async def general_chat(request: GeneralChatRequest):
+    import ollama
+    
+    messages = []
+    # Map Streamlit chat format to Ollama format
+    for item in request.history:
+        role = item.get("type", "user")
+        if role == "report": continue
+        messages.append({"role": role, "content": item.get("content", "")})
+    
+    # Append current user prompt
+    messages.append({"role": "user", "content": request.query})
+    
+    try:
+        logger.info(f"Ollama Proxy: Executing {request.model}")
+        response = await asyncio.to_thread(
+            ollama.chat,
+            model=request.model,
+            messages=messages
+        )
+        return {"response": response.get('message', {}).get('content', '')}
+    except Exception as e:
+        logger.error(f"Ollama chat failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn

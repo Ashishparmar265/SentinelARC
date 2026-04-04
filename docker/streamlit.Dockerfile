@@ -7,12 +7,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Minimal dependencies for the Streamlit dashboard only.
-# (Keeping this small avoids downloading the whole agent swarm stack.)
+COPY docker/requirements-streamlit.txt ./requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir \
-        "streamlit>=1.40.0" \
-        "reportlab>=4.0.0" \
-        requests
+    && pip install --no-cache-dir -r requirements.txt
 
 # Copy the dashboard app + theme config
 COPY streamlit_app.py .

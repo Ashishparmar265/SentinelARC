@@ -109,12 +109,46 @@ class AsyncExtractionAgent(AsyncBaseAgent, MCPClientMixin):
                 logger.debug(f"[{self.agent_id}] Extraction progress: {message} ({percentage}%)")
             
             # Call streaming MCP tool with progress notifications
-            result = await self.call_mcp_tool_streaming(
-                server_name="primary_tooling",
-                tool_name="browse_and_extract",
-                params=extraction_params,
-                progress_callback=progress_callback
-            )
+            result = None
+            
+            # --- PHASE 3: PDF Binary Parsing ---
+            pdf_url = task_data.get("pdf_url")
+            target_url = pdf_url if pdf_url else url
+            if target_url and target_url.lower().endswith('.pdf'):
+                logger.info(f"[{self.agent_id}] Detected PDF. Bypassing MCP DOM scraper for native PyPDF2 stream: {target_url}")
+                try:
+                    import PyPDF2
+                    import io
+                    import requests
+                    await self._send_status_update("extracting_pdf", 25.0, task_id)
+                    resp = await asyncio.to_thread(requests.get, target_url, timeout=20)
+                    if resp.status_code == 200:
+                        pdf_file = io.BytesIO(resp.content)
+                        reader = PyPDF2.PdfReader(pdf_file)
+                        extracted_text = []
+                        for i in range(min(15, len(reader.pages))): # extract first 15 pages max
+                            extracted_text.append(reader.pages[i].extract_text() or "")
+                        
+                        pdf_content = "\n".join(extracted_text)
+                        if len(pdf_content.strip()) > 200:
+                            logger.info(f"[{self.agent_id}] Successfully extracted {len(pdf_content)} bytes natively from PDF.")
+                            result = {
+                                "url": target_url, 
+                                "title": f"PDF Document from {target_url}", 
+                                "content": pdf_content, 
+                                "word_count": len(pdf_content.split())
+                            }
+                except Exception as e:
+                    logger.warning(f"[{self.agent_id}] PDF extraction failed: {str(e)}. Falling back to MCP tool.")
+                    
+            if not result:
+                result = await self.call_mcp_tool_streaming(
+                    server_name="primary_tooling",
+                    tool_name="browse_and_extract",
+                    params=extraction_params,
+                    progress_callback=progress_callback
+                )
+            
             
             # Process extraction result
             extracted_url = result.get("url", url)

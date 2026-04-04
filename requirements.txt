@@ -40,3 +40,8 @@ streamlit>=1.40.0
 # PDF generation for the dashboard
 reportlab>=4.0.0
 
+# Database & Auth
+sqlalchemy>=2.0.0
+passlib[bcrypt]
+
+PyPDF2==3.0.1
