@@ -88,17 +88,20 @@ def trigger_research(query: str, user_id: int) -> dict:
     resp.raise_for_status()
     return resp.json()
 
-def trigger_general_ai(query: str, model: str, chat_history: list, user_id: int) -> str:
-    """Call the FastAPI /general_chat endpoint."""
+def trigger_general_ai(query: str, model: str, chat_history: list, user_id: int):
+    """Call the FastAPI /general_chat endpoint with streaming support."""
     payload = {
         "query": query,
         "model": model,
         "history": chat_history,
         "user_id": user_id
     }
-    resp = requests.post(f"{API_URL}/general_chat", json=payload, timeout=(5, 120))
-    resp.raise_for_status()
-    return resp.json().get("response", "Error: No response generated.")
+    # Initial connection timeout: 10s, no read timeout for streaming
+    with requests.post(f"{API_URL}/general_chat", json=payload, stream=True, timeout=(10, None)) as resp:
+        resp.raise_for_status()
+        for chunk in resp.iter_content(chunk_size=None, decode_unicode=True):
+            if chunk:
+                yield chunk
 
 
 def list_reports(user_id: int):
@@ -757,14 +760,14 @@ def main():
         
         if st.session_state.get("mode") == "General AI":
             try:
-                with st.spinner("Generating..."):
-                    resp = trigger_general_ai(
+                with st.chat_message("assistant"):
+                    full_response = st.write_stream(trigger_general_ai(
                         prompt.strip(),
                         st.session_state.get("ai_model", "llama3.1:8b"),
                         st.session_state["chat_history"],
                         st.session_state.get("user_id")
-                    )
-                st.session_state["chat_history"].append({"type": "assistant", "content": resp})
+                    ))
+                st.session_state["chat_history"].append({"type": "assistant", "content": full_response})
                 st.rerun()
             except Exception as e:
                 st.error(f"General AI request failed: {e}")

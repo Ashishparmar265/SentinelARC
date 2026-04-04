@@ -127,29 +127,37 @@ async def start_research(request: ResearchRequest, background_tasks: BackgroundT
 
 @app.post("/general_chat")
 async def general_chat(request: GeneralChatRequest):
-    import ollama
+    from fastapi.responses import StreamingResponse
+    import json
+    from ollama import AsyncClient
     
     messages = []
-    # Map Streamlit chat format to Ollama format
     for item in request.history:
         role = item.get("type", "user")
         if role == "report": continue
+        if role == "assistant": role = "assistant"
         messages.append({"role": role, "content": item.get("content", "")})
     
-    # Append current user prompt
     messages.append({"role": "user", "content": request.query})
     
-    try:
-        logger.info(f"Ollama Proxy: Executing {request.model}")
-        response = await asyncio.to_thread(
-            ollama.chat,
-            model=request.model,
-            messages=messages
-        )
-        return {"response": response.get('message', {}).get('content', '')}
-    except Exception as e:
-        logger.error(f"Ollama chat failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    async def generate_response():
+        try:
+            logger.info(f"Ollama Proxy (Streaming): Executing {request.model}")
+            client = AsyncClient()
+            async for chunk in await client.chat(
+                model=request.model,
+                messages=messages,
+                stream=True
+            ):
+                content = chunk['message']['content']
+                if content:
+                    # Yield as a JSON-encoded line or plain text
+                    yield content
+        except Exception as e:
+            logger.error(f"Ollama streaming failed: {e}")
+            yield f"\n[Error: {str(e)}]"
+
+    return StreamingResponse(generate_response(), media_type="text/plain")
 
 if __name__ == "__main__":
     import uvicorn
