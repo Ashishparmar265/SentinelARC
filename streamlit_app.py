@@ -350,7 +350,7 @@ def extract_summary_from_report(markdown_content: str) -> str:
 
 
 def main():
-    st.set_page_config(page_title="SentinelARC Research Dashboard", layout="wide")
+    st.set_page_config(page_title="SentinelARC Research Dashboard", layout="wide", initial_sidebar_state="expanded")
 
     # Check for existing session in query params
     if not st.session_state.get("authenticated"):
@@ -380,14 +380,24 @@ def main():
           footer { visibility: hidden; }
           header { visibility: hidden; }
 
-          /* Sidebar */
+          /* Sidebar – always visible, never collapsed */
           section[data-testid="stSidebar"] {
             background-color: #ffffff;
             border-right: 1px solid #e2e8f0;
             box-shadow: 2px 0 10px rgba(0,0,0,0.02);
+            min-width: 260px !important;
+            display: flex !important;
           }
-          section[data-testid="stSidebar"] > div:first-child {
-            padding: 24px 16px;
+          /* Hide the collapse arrow button */
+          button[data-testid="baseButton-secondary"] svg[data-testid="stIconExpander"],
+          button[data-testid="collapsedControl"] {
+            display: none !important;
+          }
+          section[data-testid="stSidebar"][aria-expanded="false"] {
+            transform: none !important;
+            margin-left: 0 !important;
+            visibility: visible !important;
+            display: flex !important;
           }
           
           /* Sidebar Buttons */
@@ -407,11 +417,28 @@ def main():
             border-color: #cbd5e1;
           }
 
-          /* Main content area */
+          /* Main content area – allow independent scroll for sticky to work */
           div[data-testid="stVerticalBlock"] {
             max-width: 1000px;
             margin: 0 auto;
             padding: 0 1rem;
+          }
+
+          /* Make sticky work: the scroll must happen inside Streamlit's main content block */
+          section.main > div.block-container {
+            overflow-y: auto !important;
+            height: 100vh !important;
+            padding-top: 0 !important;
+          }
+
+          /* Control Center sticky wrapper – pin it just below the header */
+          div[data-stickytop="control-center"] {
+            position: sticky;
+            top: 80px;
+            z-index: 998;
+            background: #f8fafc;
+            padding-bottom: 8px;
+            margin-bottom: 8px;
           }
 
           /* Containers / Cards */
@@ -462,17 +489,20 @@ def main():
             border-color: #3b82f6;
           }
 
-          /* Top Header Styling */
+          /* Top Header Styling – Sticky */
           .app-header {
             background: linear-gradient(90deg, #1e293b 0%, #0f172a 100%);
-            padding: 28px 32px;
+            padding: 20px 28px;
             border-radius: 16px;
-            margin-bottom: 32px;
+            margin-bottom: 16px;
             color: white;
             box-shadow: 0 10px 25px rgba(15, 23, 42, 0.15);
             display: flex;
             align-items: center;
             justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 999;
           }
           .app-header h1 {
             color: white !important;
