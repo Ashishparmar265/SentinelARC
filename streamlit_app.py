@@ -539,26 +539,23 @@ def main():
             font-weight: 600 !important;
           }
           
-          .app-header h1 {
-            color: white !important;
-            margin: 0;
-            font-size: 28px;
-            font-weight: 700;
-            letter-spacing: -0.025em;
+          /* Top-Right Profile Rectangle */
+          [data-testid="stVerticalBlock"] > div:has(div.top-right-profile-marker) {
+            position: fixed !important;
+            top: 1rem !important;
+            right: 1.5rem !important;
+            z-index: 10000 !important;
+            background: rgba(255, 255, 255, 0.95) !important;
+            backdrop-filter: blur(8px) !important;
+            padding: 12px !important;
+            border-radius: 12px !important;
+            border: 1px solid #e2e8f0 !important;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08) !important;
+            width: auto !important;
+            min-width: 140px !important;
           }
-          .app-header p {
-            margin: 4px 0 0 0;
-            color: #94a3b8;
-            font-size: 15px;
-          }
-          .status-badge {
-            background: rgba(52, 211, 153, 0.2);
-            color: #34d399;
-            padding: 6px 12px;
-            border-radius: 20px;
-            font-size: 13px;
-            font-weight: 600;
-            border: 1px solid rgba(52, 211, 153, 0.3);
+          .top-right-profile-marker {
+              display: none;
           }
         </style>
         """,
@@ -612,6 +609,22 @@ def main():
         show_login_page()
         return
 
+    # ── Top-Right Profile Overlay ──────────────────────────────────────
+    with st.container():
+        # This empty div acts as a marker for our CSS selector
+        st.markdown('<div class="top-right-profile-marker"></div>', unsafe_allow_html=True)
+        st.markdown(f"**{st.session_state.get('username', 'User')}**")
+        
+        if st.button("Logout", key="top_right_logout", use_container_width=True):
+            session_token = st.query_params.get("session")
+            if session_token:
+                delete_session(session_token)
+                st.query_params.clear()
+            for k in ["authenticated", "user_id", "username", "chat_history",
+                      "shown_reports", "active_report_id", "_backfilled"]:
+                st.session_state.pop(k, None)
+            st.rerun()
+
     # ── helpers ──────────────────────────────────────────────────────────
     user_id = st.session_state.get("user_id")
 
@@ -660,16 +673,6 @@ def main():
             <span class="sidebar-badge">● System Online</span>
         </div>
         """, unsafe_allow_html=True)
-        st.markdown(f"#### 👤 {st.session_state.get('username', 'User')}")
-        if st.button("Logout", use_container_width=True):
-            session_token = st.query_params.get("session")
-            if session_token:
-                delete_session(session_token)
-                st.query_params.clear()
-            for k in ["authenticated", "user_id", "username", "chat_history",
-                      "shown_reports", "active_report_id", "_backfilled"]:
-                st.session_state.pop(k, None)
-            st.rerun()
 
         st.markdown("---")
         if st.button("＋ New Research", use_container_width=True, key="btn_new_chat",
