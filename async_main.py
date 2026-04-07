@@ -147,7 +147,8 @@ async def general_chat(request: GeneralChatRequest):
             async for chunk in await client.chat(
                 model=request.model,
                 messages=messages,
-                stream=True
+                stream=True,
+                options={"num_thread": 8}
             ):
                 content = chunk['message']['content']
                 if content:

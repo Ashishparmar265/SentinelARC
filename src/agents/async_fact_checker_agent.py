@@ -236,7 +236,7 @@ class AsyncFactCheckerAgent(AsyncBaseAgent, MCPClientMixin):
                         'content': f"Claim: {claim}"
                     }
                 ],
-                options={'temperature': 0.2}
+                options={'temperature': 0.2, 'num_thread': 8}
             )
             
             res_text = response['message']['content']

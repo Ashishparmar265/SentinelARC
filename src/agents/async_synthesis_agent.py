@@ -171,7 +171,7 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
                         'content': f"Research question: {query}"
                     }
                 ],
-                options={'temperature': 0.4}
+                options={'temperature': 0.4, 'num_thread': 8}
             )
             intro = response['message']['content'].strip()
             logger.info(f"[{self.agent_id}] Introduction generated ({len(intro.split())} words)")
@@ -204,7 +204,7 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
                         'content': f"Source title: {title}\nURL: {url}\n\nContent:\n{content}"
                     }
                 ],
-                options={'temperature': 0.4}
+                options={'temperature': 0.4, 'num_thread': 8}
             )
             analysis = response['message']['content'].strip()
             logger.info(f"[{self.agent_id}] Source {index} analysis generated ({len(analysis.split())} words)")
@@ -248,7 +248,7 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
                         'role': 'user',
                         'content': sub_q
                     }],
-                    options={'temperature': 0.1}
+                    options={'temperature': 0.1, 'num_thread': 8}
                 )
                 sub_answers.append(f"**{sub_q}**\n{ans_resp['message']['content'].strip()}")
             
@@ -272,7 +272,7 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
                         'content': f"Core Research Question: {query}\n\nMulti-Hop Answers:\n{combined_context}"
                     }
                 ],
-                options={'temperature': 0.4}
+                options={'temperature': 0.4, 'num_thread': 8}
             )
             conclusion = response['message']['content'].strip()
             

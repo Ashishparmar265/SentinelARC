@@ -55,7 +55,7 @@ class AsyncSearchAgent(AsyncBaseAgent):
                         'content': query
                     }
                 ],
-                options={'temperature': 0.3}  # Low creativity for precision
+                options={'temperature': 0.3, 'num_thread': 8}  # Low creativity for precision, limited threads
             )
             expanded_query = response['message']['content'].strip()
             logger.info(f"[{self.agent_id}] Original query: {query}")
@@ -189,7 +189,7 @@ class AsyncSearchAgent(AsyncBaseAgent):
                         ollama.chat,
                         model='llama3.1:8b',
                         messages=[{'role': 'user', 'content': rerank_prompt}],
-                        options={'temperature': 0.1}
+                        options={'temperature': 0.1, 'num_thread': 8}
                     )
                     import json, re
                     content_str = rerank_response['message']['content']
