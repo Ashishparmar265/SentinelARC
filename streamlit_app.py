@@ -489,34 +489,38 @@ def main():
             border-color: #3b82f6;
           }
 
-          /* Top Header Styling – Fixed, starts AFTER sidebar */
-          .app-header {
-            background: linear-gradient(90deg, #1e293b 0%, #0f172a 100%);
-            padding: 14px 28px;
-            border-radius: 0;
+          /* Sidebar Brand Block – top of left panel */
+          .sidebar-brand {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            padding: 18px 16px 14px 16px;
+            border-radius: 12px;
+            margin-bottom: 4px;
             color: white;
-            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.25);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            position: fixed;
-            top: 0;
-            left: 21rem;   /* Streamlit sidebar width in wide layout */
-            right: 0;
-            z-index: 9999;
-            margin: 0 !important;
+            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.2);
           }
-          /* Spacer so content doesn't hide under fixed header */
-          .header-spacer {
-            height: 72px;
+          .sidebar-brand h2 {
+            color: white !important;
+            margin: 0 0 4px 0 !important;
+            font-size: 20px !important;
+            font-weight: 700 !important;
+            letter-spacing: -0.02em;
+            border-bottom: none !important;
           }
-          /* Sticky Control Center wrapper */
-          #control-center-anchor + div,
-          #control-center-anchor ~ div > div[data-testid="stVerticalBlockBorderWrapper"] {
-            position: sticky !important;
-            top: 72px !important;
-            z-index: 998 !important;
-            background: #f8fafc !important;
+          .sidebar-brand p {
+            margin: 0 0 10px 0;
+            color: #94a3b8;
+            font-size: 11px;
+            line-height: 1.4;
+          }
+          .sidebar-badge {
+            display: inline-block;
+            background: rgba(52, 211, 153, 0.2);
+            color: #34d399;
+            padding: 3px 9px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+            border: 1px solid rgba(52, 211, 153, 0.3);
           }
           .app-header h1 {
             color: white !important;
@@ -586,19 +590,6 @@ def main():
             unsafe_allow_html=True
         )
 
-    st.markdown(
-        '''
-        <div class="app-header">
-            <div>
-                <h1>SentinelARC</h1>
-                <p>Autonomous Literature Review &amp; Fact-Checking</p>
-            </div>
-            <div class="status-badge">● System Online</div>
-        </div>
-        <div class="header-spacer"></div>
-        ''',
-        unsafe_allow_html=True,
-    )
 
     if not st.session_state.get("authenticated"):
         show_login_page()
@@ -644,6 +635,14 @@ def main():
 
     # ── Left sidebar – Chat History Panel ────────────────────────────────
     with st.sidebar:
+        # Brand block at the very top of the sidebar
+        st.markdown("""
+        <div class="sidebar-brand">
+            <h2>SentinelARC</h2>
+            <p>Autonomous Literature Review &amp; Fact-Checking</p>
+            <span class="sidebar-badge">● System Online</span>
+        </div>
+        """, unsafe_allow_html=True)
         st.markdown(f"#### 👤 {st.session_state.get('username', 'User')}")
         if st.button("Logout", use_container_width=True):
             session_token = st.query_params.get("session")
