@@ -557,25 +557,29 @@ def main():
             height: auto !important;
           }
           
-          /* Main content alignment & spacing */
+          /* Main content alignment & spacing - CENTERED */
           .stAppViewMain .block-container {
-              margin-left: 0 !important;
-              padding-left: 5rem !important;
-              padding-right: 240px !important;
-              max-width: 1250px !important;
+              margin-left: auto !important;
+              margin-right: auto !important;
+              padding-left: 1rem !important;
+              padding-right: 1rem !important;
+              max-width: 1100px !important;
           }
           
-          /* Sync Chat Input width & position with cards */
+          /* Move Chat Input to TOP and align with content */
           [data-testid="stChatInput"] {
-              left: 21rem !important; /* Sidebar width */
-              padding-left: 5rem !important;
-              padding-right: 240px !important;
-              background-color: #f8fafc !important; /* Match body bg */
+              position: static !important;
+              width: 100% !important;
+              max-width: 1100px !important;
+              margin: 0 auto 2rem auto !important;
+              background-color: transparent !important;
           }
           [data-testid="stChatInput"] > div {
-              max-width: calc(1250px - 240px - 5rem) !important;
-              margin-left: 0 !important;
+              width: 100% !important;
+              max-width: 1100px !important;
+              margin: 0 !important;
           }
+
           
           /* Fix for small screens / collapsed sidebar */
           @media (max-width: 768px) {
@@ -671,6 +675,41 @@ def main():
                       "shown_reports", "active_report_id", "_backfilled"]:
                 st.session_state.pop(k, None)
             st.rerun()
+
+    # --- Search bar / input (at the TOP of main area) ---
+    prompt = st.chat_input("Message SentinelARC...")
+    if prompt:
+        # Add user message to history immediately so it appears below the input
+        st.session_state["chat_history"].append({"type": "user", "content": prompt.strip()})
+
+        if st.session_state.get("mode") == "General AI":
+            try:
+                # We render the response below the input but we need to rerun to keep history order
+                # Actually, Streamlit will render the chat message here, then we append to history
+                with st.chat_message("assistant"):
+                    full_response = st.write_stream(trigger_general_ai(
+                        prompt.strip(),
+                        st.session_state.get("ai_model", "llama3.1:8b"),
+                        st.session_state["chat_history"],
+                        st.session_state.get("user_id")
+                    ))
+                st.session_state["chat_history"].append({"type": "assistant", "content": full_response})
+                st.rerun()
+            except Exception as e:
+                st.error(f"General AI request failed: {e}")
+        else:
+            if st.session_state.get("is_researching"):
+                st.warning("Please wait for the current research to finish!")
+            else:
+                try:
+                    # Set spinner flag FIRST, then call API, then rerun → spinner appears immediately
+                    st.session_state["is_researching"] = True
+                    st.session_state["poll_count"] = 0
+                    st.session_state["pending_query"] = prompt.strip()
+                    st.rerun()  # This rerun shows the spinner before the API call blocks
+                except Exception as e:
+                    st.session_state["is_researching"] = False
+                    st.error(f"Failed to start research: {e}")
 
 
     # ── helpers ──────────────────────────────────────────────────────────
@@ -888,40 +927,7 @@ def main():
                     st.error("Request timed out. Check terminal logs.")
                 st.rerun()
 
-    # --- Search bar / input (bottom) ---
-    prompt = st.chat_input("Message SentinelARC...")
-    if prompt:
-        # Add user message to history immediately so it appears before the spinner
-        st.session_state["chat_history"].append({"type": "user", "content": prompt.strip()})
-
-        if st.session_state.get("mode") == "General AI":
-            try:
-                with st.chat_message("assistant"):
-                    full_response = st.write_stream(trigger_general_ai(
-                        prompt.strip(),
-                        st.session_state.get("ai_model", "llama3.1:8b"),
-                        st.session_state["chat_history"],
-                        st.session_state.get("user_id")
-                    ))
-                st.session_state["chat_history"].append({"type": "assistant", "content": full_response})
-                st.rerun()
-            except Exception as e:
-                st.error(f"General AI request failed: {e}")
-        else:
-            if st.session_state.get("is_researching"):
-                st.warning("Please wait for the current research to finish!")
-            else:
-                try:
-                    # Set spinner flag FIRST, then call API, then rerun → spinner appears immediately
-                    st.session_state["is_researching"] = True
-                    st.session_state["poll_count"] = 0
-                    st.session_state["pending_query"] = prompt.strip()
-                    st.rerun()  # This rerun shows the spinner before the API call blocks
-                except Exception as e:
-                    st.session_state["is_researching"] = False
-                    st.error(f"Failed to start research: {e}")
-
-    # Handle the deferred API call for research (set in the block above on previous rerun)
+    # Handle the deferred API call for research (set in the chat input block at top)
     if st.session_state.get("is_researching") and st.session_state.get("pending_query"):
         pending = st.session_state.pop("pending_query", None)
         if pending:
