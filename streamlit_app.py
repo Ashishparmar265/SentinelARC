@@ -559,72 +559,85 @@ def main():
         show_login_page()
         return
 
-    # --- Sidebar: menu (clickable) + report picker with search ---
-    selected_path = None
+    # ── helpers ──────────────────────────────────────────────────────────
+    user_id = st.session_state.get("user_id")
+
+    def _backfill_reports_from_disk():
+        """Scan on-disk report files and register any that are not yet in the DB."""
+        from src.database import SessionLocal, Report
+        from pathlib import Path as _P
+        user_dir = _P("output/reports") / str(user_id)
+        if not user_dir.exists():
+            return
+        db = SessionLocal()
+        existing_paths = {r.file_path for r in db.query(Report).filter(Report.user_id == user_id).all()}
+        for f in user_dir.glob("research_report_*.md"):
+            fp = str(f)
+            if fp not in existing_paths:
+                new_r = Report(user_id=user_id, file_path=fp, query="(Recovered — query unknown)")
+                db.add(new_r)
+        db.commit()
+        db.close()
+
+    # Run the backfill once per session
+    if not st.session_state.get("_backfilled"):
+        _backfill_reports_from_disk()
+        st.session_state["_backfilled"] = True
+
+    def _load_all_reports():
+        from src.database import SessionLocal, Report
+        db = SessionLocal()
+        rows = (db.query(Report)
+                  .filter(Report.user_id == user_id)
+                  .order_by(Report.created_at.asc())
+                  .all())
+        result = [(r.id, r.query, r.file_path) for r in rows]
+        db.close()
+        return result  # list of (id, query, file_path)
+
+    all_reports = _load_all_reports()
+
+    # ── Left sidebar – Chat History Panel ────────────────────────────────
     with st.sidebar:
-        st.markdown(f"#### Welcome, {st.session_state.get('username', 'User')}!")
+        st.markdown(f"#### 👤 {st.session_state.get('username', 'User')}")
         if st.button("Logout", use_container_width=True):
             session_token = st.query_params.get("session")
             if session_token:
                 delete_session(session_token)
                 st.query_params.clear()
-            st.session_state["authenticated"] = False
-            st.session_state["user_id"] = None
-            st.session_state["username"] = None
-            st.rerun()
-
-        st.markdown("#### Menu")
-        if st.button("+ New chat", use_container_width=True, key="btn_new_chat"):
-            st.session_state["last_query"] = ""
-            st.session_state["report_choice"] = ""
-            st.rerun()
-        if st.button("Scheduled actions", use_container_width=True, key="btn_scheduled"):
-            st.session_state["menu_info"] = "Scheduled actions (UI placeholder)"
-            st.rerun()
-        if st.button("Gems", use_container_width=True, key="btn_gems"):
-            st.session_state["menu_info"] = "Gems (UI placeholder)"
-            st.rerun()
-        if st.button("My stuff", use_container_width=True, key="btn_mystuff"):
-            st.session_state["menu_info"] = "My stuff (UI placeholder)"
+            for k in ["authenticated", "user_id", "username", "chat_history",
+                      "shown_reports", "active_report_id", "_backfilled"]:
+                st.session_state.pop(k, None)
             st.rerun()
 
         st.markdown("---")
-        st.markdown("#### Chats")
-
-        report_search = st.text_input("Search reports", placeholder="Type to filter...", key="report_search")
-        files = list_reports(st.session_state.get("user_id"))
-        if not files:
-            st.info("No reports yet.")
-        else:
-            all_options = [f.name for f in files]
-            if report_search.strip():
-                filtered = [o for o in all_options if report_search.lower() in o.lower()]
-            else:
-                filtered = all_options
-
-            if not filtered:
-                st.info("No reports match your search.")
-            else:
-                if "report_choice" not in st.session_state or st.session_state["report_choice"] not in filtered:
-                    st.session_state["report_choice"] = filtered[0]
-                def on_report_select():
-                    st.session_state["report_clicked"] = True
-
-                choice = st.selectbox(
-                    "Report",
-                    filtered,
-                    index=filtered.index(st.session_state["report_choice"]),
-                    key="report_choice",
-                    label_visibility="collapsed",
-                    on_change=on_report_select
-                )
-                selected_path = next(p for p in files if p.name == choice)
-
-        if st.button("Refresh reports", use_container_width=True):
+        if st.button("＋ New Research", use_container_width=True, key="btn_new_chat",
+                     type="primary"):
+            st.session_state["active_report_id"] = None
+            st.session_state["chat_history"] = []
             st.rerun()
 
-        if st.session_state.get("menu_info"):
-            st.caption(st.session_state["menu_info"])
+        st.markdown("#### 🗂 Chat History")
+        if not all_reports:
+            st.caption("No chats yet. Start your first research!")
+        else:
+            search_q = st.text_input("", placeholder="🔍 Filter chats…", label_visibility="collapsed", key="chat_search")
+            for rep_id, query, fpath in reversed(all_reports):  # newest first
+                label = (query.split()[0] if query.split() else "Chat")  # first word
+                if search_q and search_q.lower() not in query.lower():
+                    continue
+                full_label = f"**{label}** — _{query[:35]}{'…' if len(query)>35 else ''}_"
+                is_active = st.session_state.get("active_report_id") == rep_id
+                btn_style = "primary" if is_active else "secondary"
+                if st.button(full_label, key=f"chat_{rep_id}", use_container_width=True, type=btn_style):
+                    # Open this chat: set active, rebuild history for this single chat
+                    st.session_state["active_report_id"] = rep_id
+                    st.session_state["chat_history"] = [
+                        {"type": "user",   "content": f"Research: {query}"},
+                        {"type": "report", "path":    fpath}
+                    ]
+                    st.session_state["shown_reports"] = {fpath}
+                    st.rerun()
 
     # --- Main content: Command Center (Prominent UI) ---
     st.markdown("### 🛠️ Control Center")
@@ -643,47 +656,29 @@ def main():
 
     # --- Main content: Chat History Management ---
     if "chat_history" not in st.session_state:
+        # On first load (no active chat) show all reports in one stream
         st.session_state["chat_history"] = []
-        # Populate history from database on first visit
-        from src.database import SessionLocal, User, Report
-        db = SessionLocal()
-        reports = db.query(Report).filter(Report.user_id == st.session_state["user_id"]).order_by(Report.created_at.asc()).all()
-        for r in reports:
-            st.session_state["chat_history"].append({"type": "user", "content": f"Research: {r.query}"})
-            st.session_state["chat_history"].append({"type": "report", "path": r.file_path})
-        db.close()
-        
+        for rep_id, query, fpath in all_reports:
+            st.session_state["chat_history"].append({"type": "user",   "content": f"Research: {query}"})
+            st.session_state["chat_history"].append({"type": "report", "path":    fpath})
+
     if "shown_reports" not in st.session_state:
         st.session_state["shown_reports"] = {item.get("path") for item in st.session_state["chat_history"] if item.get("path")}
 
-    # Track reports that have been shown in history so we can auto-append new ones
-    from src.database import SessionLocal, Report
-    db = SessionLocal()
-    current_reports = db.query(Report).filter(Report.user_id == st.session_state["user_id"]).all()
-    db.close()
-    
+    # Auto-detect freshly completed reports from the DB and append to current view
     new_report_found = False
-    for r in current_reports:
-        if r.file_path not in st.session_state["shown_reports"]:
-            # Only append if it's not already in history (to avoid duplicates on refresh)
-            st.session_state["chat_history"].append({"type": "report", "path": r.file_path})
-            st.session_state["shown_reports"].add(r.file_path)
+    for rep_id, query, fpath in all_reports:
+        if fpath not in st.session_state["shown_reports"]:
+            st.session_state["chat_history"].append({"type": "user",   "content": f"Research: {query}"})
+            st.session_state["chat_history"].append({"type": "report", "path":    fpath})
+            st.session_state["shown_reports"].add(fpath)
             new_report_found = True
             if st.session_state.get("is_researching"):
                 st.session_state["is_researching"] = False
-                st.toast("Research complete! Scroll down to see the results.")
+                st.toast("✅ Research complete! Report added below.")
 
     if new_report_found:
         st.rerun()
-
-    # Allow clicking in the sidebar to manually append an old report to the end
-    # We use a unique session state flag to detect if it's a genuine click vs a default value rerun
-    if "report_clicked" in st.session_state and st.session_state["report_clicked"]:
-        if selected_path:
-            path_str = str(selected_path)
-            if not st.session_state["chat_history"] or st.session_state["chat_history"][-1].get("path") != path_str:
-                st.session_state["chat_history"].append({"type": "report", "path": path_str})
-        st.session_state["report_clicked"] = False
 
     # Render history
     for idx, item in enumerate(st.session_state["chat_history"]):
@@ -755,9 +750,9 @@ def main():
     # --- Search bar / input (bottom) ---
     prompt = st.chat_input("Message SentinelARC...")
     if prompt:
-        # Add user message to history
+        # Add user message to history immediately so it appears before the spinner
         st.session_state["chat_history"].append({"type": "user", "content": prompt.strip()})
-        
+
         if st.session_state.get("mode") == "General AI":
             try:
                 with st.chat_message("assistant"):
@@ -776,13 +771,25 @@ def main():
                 st.warning("Please wait for the current research to finish!")
             else:
                 try:
-                    resp = trigger_research(prompt.strip(), st.session_state.get("user_id"))
-                    st.toast("Agents are researching... check back in a moment.")
+                    # Set spinner flag FIRST, then call API, then rerun → spinner appears immediately
                     st.session_state["is_researching"] = True
                     st.session_state["poll_count"] = 0
-                    st.rerun()
+                    st.session_state["pending_query"] = prompt.strip()
+                    st.rerun()  # This rerun shows the spinner before the API call blocks
                 except Exception as e:
+                    st.session_state["is_researching"] = False
                     st.error(f"Failed to start research: {e}")
+
+    # Handle the deferred API call for research (set in the block above on previous rerun)
+    if st.session_state.get("is_researching") and st.session_state.get("pending_query"):
+        pending = st.session_state.pop("pending_query", None)
+        if pending:
+            try:
+                trigger_research(pending, st.session_state.get("user_id"))
+                st.toast("🔬 Agents are researching... results will appear automatically.")
+            except Exception as e:
+                st.session_state["is_researching"] = False
+                st.error(f"Failed to start research: {e}")
 
 
 if __name__ == "__main__":
