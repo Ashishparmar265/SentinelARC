@@ -540,23 +540,30 @@ def main():
           }
           
           /* Top-Right Profile Rectangle */
-          [data-testid="stVerticalBlock"] > div:has(div.top-right-profile-marker) {
+          /* Target only the specific vertical block that contains our marker */
+          div[data-testid="stVerticalBlock"]:has(div.top-right-profile-marker) {
             position: fixed !important;
             top: 1rem !important;
             right: 1.5rem !important;
             z-index: 10000 !important;
             background: rgba(255, 255, 255, 0.95) !important;
             backdrop-filter: blur(8px) !important;
-            padding: 12px !important;
+            padding: 12px 20px !important;
             border-radius: 12px !important;
             border: 1px solid #e2e8f0 !important;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.08) !important;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1) !important;
             width: auto !important;
-            min-width: 140px !important;
+            min-width: 160px !important;
+            height: auto !important;
+          }
+          /* Ensure widgets inside don't have extra margins */
+          div[data-testid="stVerticalBlock"]:has(div.top-right-profile-marker) div[data-testid="stVerticalBlock"] {
+              gap: 0.5rem !important;
           }
           .top-right-profile-marker {
               display: none;
           }
+
         </style>
         """,
         unsafe_allow_html=True,
@@ -613,7 +620,7 @@ def main():
     with st.container():
         # This empty div acts as a marker for our CSS selector
         st.markdown('<div class="top-right-profile-marker"></div>', unsafe_allow_html=True)
-        st.markdown(f"**{st.session_state.get('username', 'User')}**")
+        st.markdown(f"👤 **{st.session_state.get('username', 'User')}**")
         
         if st.button("Logout", key="top_right_logout", use_container_width=True):
             session_token = st.query_params.get("session")
@@ -624,6 +631,7 @@ def main():
                       "shown_reports", "active_report_id", "_backfilled"]:
                 st.session_state.pop(k, None)
             st.rerun()
+
 
     # ── helpers ──────────────────────────────────────────────────────────
     user_id = st.session_state.get("user_id")
@@ -705,31 +713,30 @@ def main():
 
         # --- Sidebar Control Center (at bottom) ---
         st.markdown("---")
-        st.markdown('<div class="sidebar-control-center">', unsafe_allow_html=True)
-        st.markdown("##### 🛠️ Control Center")
-        
-        # Restore mode from query params on page refresh
-        if "mode" not in st.session_state:
-            saved_mode = st.query_params.get("mode", "research")
-            st.session_state["mode"] = "General AI" if saved_mode == "general" else "Research AI"
+        with st.container(border=True):
+            st.markdown("##### 🛠️ Control Center")
             
-        current_is_general = st.session_state.get("mode") == "General AI"
-        mode = st.radio("**Intelligence Mode**", ["Research AI", "General AI"],
-                        index=1 if current_is_general else 0,
-                        key="sidebar_mode_toggle")
-        
-        new_mode = "General AI" if "General AI" in mode else "Research AI"
-        if new_mode != st.session_state.get("mode"):
-            st.session_state["mode"] = new_mode
-            st.query_params["mode"] = "general" if new_mode == "General AI" else "research"
-            st.rerun()
+            # Restore mode from query params on page refresh
+            if "mode" not in st.session_state:
+                saved_mode = st.query_params.get("mode", "research")
+                st.session_state["mode"] = "General AI" if saved_mode == "general" else "Research AI"
+                
+            current_is_general = st.session_state.get("mode") == "General AI"
+            mode = st.radio("**Intelligence Mode**", ["Research AI", "General AI"],
+                            index=1 if current_is_general else 0,
+                            key="sidebar_mode_toggle")
             
-        if st.session_state.get("mode") == "General AI":
-            st.session_state["ai_model"] = st.selectbox("**Model Selection**", ["llama3.1:8b", "mistral", "qwen2.5-coder"])
-        else:
-            st.caption("Swarm Analysis: Llama 3.1 + Qwen 1.5B (Fast Path)")
-            
-        st.markdown('</div>', unsafe_allow_html=True)
+            new_mode = "General AI" if "General AI" in mode else "Research AI"
+            if new_mode != st.session_state.get("mode"):
+                st.session_state["mode"] = new_mode
+                st.query_params["mode"] = "general" if new_mode == "General AI" else "research"
+                st.rerun()
+                
+            if st.session_state.get("mode") == "General AI":
+                st.session_state["ai_model"] = st.selectbox("**Model Selection**", ["llama3.1:8b", "mistral", "qwen2.5-coder"])
+            else:
+                st.caption("Swarm Analysis: Llama 3.k + Qwen 1.5B (Fast Path)")
+
 
 
     # --- Main content: Chat History Management ---
