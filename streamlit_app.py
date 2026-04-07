@@ -489,7 +489,7 @@ def main():
             border-color: #3b82f6;
           }
 
-          /* Top Header Styling – Fixed to top of viewport */
+          /* Top Header Styling – Fixed, starts AFTER sidebar */
           .app-header {
             background: linear-gradient(90deg, #1e293b 0%, #0f172a 100%);
             padding: 14px 28px;
@@ -501,7 +501,7 @@ def main():
             justify-content: space-between;
             position: fixed;
             top: 0;
-            left: 0;
+            left: 21rem;   /* Streamlit sidebar width in wide layout */
             right: 0;
             z-index: 9999;
             margin: 0 !important;
@@ -509,6 +509,14 @@ def main():
           /* Spacer so content doesn't hide under fixed header */
           .header-spacer {
             height: 72px;
+          }
+          /* Sticky Control Center wrapper */
+          #control-center-anchor + div,
+          #control-center-anchor ~ div > div[data-testid="stVerticalBlockBorderWrapper"] {
+            position: sticky !important;
+            top: 72px !important;
+            z-index: 998 !important;
+            background: #f8fafc !important;
           }
           .app-header h1 {
             color: white !important;
@@ -682,6 +690,8 @@ def main():
         saved_mode = st.query_params.get("mode", "research")
         st.session_state["mode"] = "General AI" if saved_mode == "general" else "Research AI"
 
+    # Anchor div so CSS + JS can target the next sibling (Control Center container)
+    st.markdown('<div id="control-center-anchor"></div>', unsafe_allow_html=True)
     st.markdown("### 🛠️ Control Center")
     with st.container(border=True):
         col1, col2 = st.columns([1, 1])
@@ -700,6 +710,35 @@ def main():
                 st.session_state["ai_model"] = st.selectbox("**Select Model**", ["llama3.1:8b", "mistral", "qwen2.5-coder"])
             else:
                 st.markdown("<p style='padding-top: 10px; color: #64748b;'>Research Mode uses the autonomous Multi-Agent Swarm for fact-checked literature review.</p>", unsafe_allow_html=True)
+
+    # JS: make the Control Center sticky by finding the container after the anchor
+    st.markdown("""
+    <script>
+    (function() {
+        function makeStickyCC() {
+            const anchor = document.getElementById('control-center-anchor');
+            if (!anchor) return;
+            // Walk up to the stVerticalBlock row, then grab the next sibling rows
+            let parent = anchor.closest('[data-testid="stVerticalBlock"]');
+            if (!parent) return;
+            let children = Array.from(parent.children);
+            let anchorIdx = children.findIndex(c => c.contains(anchor));
+            // The Control Center heading + container are the 2 elements after anchor
+            for (let i = anchorIdx + 1; i <= anchorIdx + 2 && i < children.length; i++) {
+                let el = children[i];
+                el.style.position = 'sticky';
+                el.style.top = '72px';
+                el.style.zIndex = '998';
+                el.style.background = '#f8fafc';
+                el.style.paddingBottom = '4px';
+            }
+        }
+        // Run once DOM settles, then observe for Streamlit reruns
+        setTimeout(makeStickyCC, 600);
+        new MutationObserver(makeStickyCC).observe(document.body, {childList:true, subtree:true});
+    })();
+    </script>
+    """, unsafe_allow_html=True)
 
     # --- Main content: Chat History Management ---
     if "chat_history" not in st.session_state:
