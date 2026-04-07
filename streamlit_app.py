@@ -489,20 +489,26 @@ def main():
             border-color: #3b82f6;
           }
 
-          /* Top Header Styling – Sticky */
+          /* Top Header Styling – Fixed to top of viewport */
           .app-header {
             background: linear-gradient(90deg, #1e293b 0%, #0f172a 100%);
-            padding: 20px 28px;
-            border-radius: 16px;
-            margin-bottom: 16px;
+            padding: 14px 28px;
+            border-radius: 0;
             color: white;
-            box-shadow: 0 10px 25px rgba(15, 23, 42, 0.15);
+            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.25);
             display: flex;
             align-items: center;
             justify-content: space-between;
-            position: sticky;
+            position: fixed;
             top: 0;
-            z-index: 999;
+            left: 0;
+            right: 0;
+            z-index: 9999;
+            margin: 0 !important;
+          }
+          /* Spacer so content doesn't hide under fixed header */
+          .header-spacer {
+            height: 72px;
           }
           .app-header h1 {
             color: white !important;
@@ -577,10 +583,11 @@ def main():
         <div class="app-header">
             <div>
                 <h1>SentinelARC</h1>
-                <p>Autonomous Literature Review & Fact-Checking</p>
+                <p>Autonomous Literature Review &amp; Fact-Checking</p>
             </div>
             <div class="status-badge">● System Online</div>
         </div>
+        <div class="header-spacer"></div>
         ''',
         unsafe_allow_html=True,
     )
@@ -670,16 +677,26 @@ def main():
                     st.rerun()
 
     # --- Main content: Command Center (Prominent UI) ---
+    # Restore mode from query params on page refresh
+    if "mode" not in st.session_state:
+        saved_mode = st.query_params.get("mode", "research")
+        st.session_state["mode"] = "General AI" if saved_mode == "general" else "Research AI"
+
     st.markdown("### 🛠️ Control Center")
     with st.container(border=True):
         col1, col2 = st.columns([1, 1])
         with col1:
-            mode = st.radio("**Select Intelligence Mode**", ["Research AI (Deep Swarm Analysis) 🔎", "General AI (Instant Chat) 🤖"], 
-                            index=0 if st.session_state.get("mode") != "General AI (Instant Chat) 🤖" else 1,
+            current_is_general = st.session_state.get("mode") == "General AI"
+            mode = st.radio("**Select Intelligence Mode**", ["Research AI (Deep Swarm Analysis) 🔎", "General AI (Instant Chat) 🤖"],
+                            index=1 if current_is_general else 0,
                             horizontal=True)
-            st.session_state["mode"] = "General AI" if "General AI" in mode else "Research AI"
+            new_mode = "General AI" if "General AI" in mode else "Research AI"
+            if new_mode != st.session_state.get("mode"):
+                st.session_state["mode"] = new_mode
+                # Persist mode choice to URL so refresh restores it
+                st.query_params["mode"] = "general" if new_mode == "General AI" else "research"
         with col2:
-            if "General AI" in mode:
+            if st.session_state.get("mode") == "General AI":
                 st.session_state["ai_model"] = st.selectbox("**Select Model**", ["llama3.1:8b", "mistral", "qwen2.5-coder"])
             else:
                 st.markdown("<p style='padding-top: 10px; color: #64748b;'>Research Mode uses the autonomous Multi-Agent Swarm for fact-checked literature review.</p>", unsafe_allow_html=True)
@@ -695,6 +712,18 @@ def main():
     if "shown_reports" not in st.session_state:
         st.session_state["shown_reports"] = {item.get("path") for item in st.session_state["chat_history"] if item.get("path")}
 
+    # On refresh: check if a research task was in-progress by comparing
+    # existing DB record count vs shown_reports — if there are fewer DB rows
+    # than shown_reports it means we're mid-task, so restore the spinner.
+    if not st.session_state.get("is_researching"):
+        # Check if there's an active research task (a query marker file)
+        import glob
+        task_file = f"output/active_task_{user_id}.flag"
+        if os.path.exists(task_file):
+            st.session_state["is_researching"] = True
+            st.session_state["poll_count"] = 0
+
+
     # Auto-detect freshly completed reports from the DB and append to current view
     new_report_found = False
     for rep_id, query, fpath in all_reports:
@@ -705,6 +734,10 @@ def main():
             new_report_found = True
             if st.session_state.get("is_researching"):
                 st.session_state["is_researching"] = False
+                # Clean up the persisted flag file when research completes
+                task_flag = f"output/active_task_{user_id}.flag"
+                if os.path.exists(task_flag):
+                    os.remove(task_flag)
                 st.toast("✅ Research complete! Report added below.")
 
     if new_report_found:
@@ -815,7 +848,11 @@ def main():
         pending = st.session_state.pop("pending_query", None)
         if pending:
             try:
-                trigger_research(pending, st.session_state.get("user_id"))
+                trigger_research(pending, user_id)
+                # Write a persistent flag so the spinner can survive a page refresh
+                os.makedirs("output", exist_ok=True)
+                with open(f"output/active_task_{user_id}.flag", "w") as _f:
+                    _f.write(pending)
                 st.toast("🔬 Agents are researching... results will appear automatically.")
             except Exception as e:
                 st.session_state["is_researching"] = False
