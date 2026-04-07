@@ -522,6 +522,23 @@ def main():
             font-weight: 600;
             border: 1px solid rgba(52, 211, 153, 0.3);
           }
+          
+          /* Control Center Card in Sidebar */
+          .sidebar-control-center {
+            background-color: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 16px;
+            margin-top: 24px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+          }
+          .sidebar-control-center h5 {
+            margin-top: 0 !important;
+            font-size: 14px !important;
+            color: #1e293b !important;
+            font-weight: 600 !important;
+          }
+          
           .app-header h1 {
             color: white !important;
             margin: 0;
@@ -683,61 +700,34 @@ def main():
                     st.session_state["shown_reports"] = {fpath}
                     st.rerun()
 
-    # --- Main content: Command Center (Prominent UI) ---
-    # Restore mode from query params on page refresh
-    if "mode" not in st.session_state:
-        saved_mode = st.query_params.get("mode", "research")
-        st.session_state["mode"] = "General AI" if saved_mode == "general" else "Research AI"
+        # --- Sidebar Control Center (at bottom) ---
+        st.markdown("---")
+        st.markdown('<div class="sidebar-control-center">', unsafe_allow_html=True)
+        st.markdown("##### 🛠️ Control Center")
+        
+        # Restore mode from query params on page refresh
+        if "mode" not in st.session_state:
+            saved_mode = st.query_params.get("mode", "research")
+            st.session_state["mode"] = "General AI" if saved_mode == "general" else "Research AI"
+            
+        current_is_general = st.session_state.get("mode") == "General AI"
+        mode = st.radio("**Intelligence Mode**", ["Research AI", "General AI"],
+                        index=1 if current_is_general else 0,
+                        key="sidebar_mode_toggle")
+        
+        new_mode = "General AI" if "General AI" in mode else "Research AI"
+        if new_mode != st.session_state.get("mode"):
+            st.session_state["mode"] = new_mode
+            st.query_params["mode"] = "general" if new_mode == "General AI" else "research"
+            st.rerun()
+            
+        if st.session_state.get("mode") == "General AI":
+            st.session_state["ai_model"] = st.selectbox("**Model Selection**", ["llama3.1:8b", "mistral", "qwen2.5-coder"])
+        else:
+            st.caption("Swarm Analysis: Llama 3.1 + Qwen 1.5B (Fast Path)")
+            
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    # Anchor div so CSS + JS can target the next sibling (Control Center container)
-    st.markdown('<div id="control-center-anchor"></div>', unsafe_allow_html=True)
-    st.markdown("### 🛠️ Control Center")
-    with st.container(border=True):
-        col1, col2 = st.columns([1, 1])
-        with col1:
-            current_is_general = st.session_state.get("mode") == "General AI"
-            mode = st.radio("**Select Intelligence Mode**", ["Research AI (Deep Swarm Analysis) 🔎", "General AI (Instant Chat) 🤖"],
-                            index=1 if current_is_general else 0,
-                            horizontal=True)
-            new_mode = "General AI" if "General AI" in mode else "Research AI"
-            if new_mode != st.session_state.get("mode"):
-                st.session_state["mode"] = new_mode
-                # Persist mode choice to URL so refresh restores it
-                st.query_params["mode"] = "general" if new_mode == "General AI" else "research"
-        with col2:
-            if st.session_state.get("mode") == "General AI":
-                st.session_state["ai_model"] = st.selectbox("**Select Model**", ["llama3.1:8b", "mistral", "qwen2.5-coder"])
-            else:
-                st.markdown("<p style='padding-top: 10px; color: #64748b;'>Research Mode uses the autonomous Multi-Agent Swarm for fact-checked literature review.</p>", unsafe_allow_html=True)
-
-    # JS: make the Control Center sticky by finding the container after the anchor
-    st.markdown("""
-    <script>
-    (function() {
-        function makeStickyCC() {
-            const anchor = document.getElementById('control-center-anchor');
-            if (!anchor) return;
-            // Walk up to the stVerticalBlock row, then grab the next sibling rows
-            let parent = anchor.closest('[data-testid="stVerticalBlock"]');
-            if (!parent) return;
-            let children = Array.from(parent.children);
-            let anchorIdx = children.findIndex(c => c.contains(anchor));
-            // The Control Center heading + container are the 2 elements after anchor
-            for (let i = anchorIdx + 1; i <= anchorIdx + 2 && i < children.length; i++) {
-                let el = children[i];
-                el.style.position = 'sticky';
-                el.style.top = '72px';
-                el.style.zIndex = '998';
-                el.style.background = '#f8fafc';
-                el.style.paddingBottom = '4px';
-            }
-        }
-        // Run once DOM settles, then observe for Streamlit reruns
-        setTimeout(makeStickyCC, 600);
-        new MutationObserver(makeStickyCC).observe(document.body, {childList:true, subtree:true});
-    })();
-    </script>
-    """, unsafe_allow_html=True)
 
     # --- Main content: Chat History Management ---
     if "chat_history" not in st.session_state:
