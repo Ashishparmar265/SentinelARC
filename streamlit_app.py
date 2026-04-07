@@ -557,15 +557,35 @@ def main():
             height: auto !important;
           }
           
-          /* Main content padding-right to avoid profile overlap */
+          /* Main content alignment & spacing */
           .stAppViewMain .block-container {
-              padding-right: 200px !important;
-              max-width: 98% !important;
+              margin-left: 0 !important;
+              padding-left: 5rem !important;
+              padding-right: 240px !important;
+              max-width: 1250px !important;
+          }
+          
+          /* Sync Chat Input width & position with cards */
+          [data-testid="stChatInput"] {
+              left: 21rem !important; /* Sidebar width */
+              padding-left: 5rem !important;
+              padding-right: 240px !important;
+              background-color: #f8fafc !important; /* Match body bg */
+          }
+          [data-testid="stChatInput"] > div {
+              max-width: calc(1250px - 240px - 5rem) !important;
+              margin-left: 0 !important;
           }
           
           /* Fix for small screens / collapsed sidebar */
           @media (max-width: 768px) {
               .stAppViewMain .block-container {
+                  padding-right: 1rem !important;
+                  padding-left: 1rem !important;
+              }
+              [data-testid="stChatInput"] {
+                  left: 0 !important;
+                  padding-left: 1rem !important;
                   padding-right: 1rem !important;
               }
               div[data-testid="stVerticalBlock"]:has(div.top-right-profile-marker) {
@@ -579,6 +599,7 @@ def main():
           div[data-testid="stVerticalBlock"]:has(div.top-right-profile-marker) div[data-testid="stVerticalBlock"] {
               gap: 0.5rem !important;
           }
+
           .top-right-profile-marker {
               display: none;
           }
