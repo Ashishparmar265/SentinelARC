@@ -557,52 +557,35 @@ def main():
             height: auto !important;
           }
           
-          /* Main content alignment & spacing - CENTERED */
+          /* Main content alignment & spacing */
+          /* Main content: Centered Rectangle Layout */
           .stAppViewMain .block-container {
-              margin-left: auto !important;
-              margin-right: auto !important;
-              padding-left: 1rem !important;
-              padding-right: 1rem !important;
-              max-width: 1100px !important;
+              margin: 2rem auto !important;
+              padding: 2.5rem !important;
+              max-width: 1000px !important;
+              background-color: #ffffff;
+              border-radius: 16px;
+              box-shadow: 0 4px 25px rgba(0,0,0,0.05);
+              border: 1px solid #e2e8f0;
           }
           
-          /* Move Chat Input to TOP and align with content */
-          [data-testid="stChatInput"] {
-              position: static !important;
-              width: 100% !important;
-              max-width: 1100px !important;
-              margin: 0 auto 2rem auto !important;
-              background-color: transparent !important;
+          /* Hide the default bottom-pinned chat input */
+          div[data-testid="stChatInput"], [data-testid="stChatInputSubmit"] {
+              display: none !important;
           }
-          [data-testid="stChatInput"] > div {
-              width: 100% !important;
-              max-width: 1100px !important;
-              margin: 0 !important;
-          }
-
           
-          /* Fix for small screens / collapsed sidebar */
-          @media (max-width: 768px) {
-              .stAppViewMain .block-container {
-                  padding-right: 1rem !important;
-                  padding-left: 1rem !important;
-              }
-              [data-testid="stChatInput"] {
-                  left: 0 !important;
-                  padding-left: 1rem !important;
-                  padding-right: 1rem !important;
-              }
-              div[data-testid="stVerticalBlock"]:has(div.top-right-profile-marker) {
-                  position: static !important;
-                  margin-bottom: 1rem;
-                  width: 100% !important;
-              }
+          /* Style the new top search container */
+          .top-search-container {
+              margin-bottom: 2rem;
+              padding-bottom: 1rem;
+              border-bottom: 1px solid #f1f5f9;
           }
 
           /* Ensure widgets inside don't have extra margins */
           div[data-testid="stVerticalBlock"]:has(div.top-right-profile-marker) div[data-testid="stVerticalBlock"] {
               gap: 0.5rem !important;
           }
+
 
           .top-right-profile-marker {
               display: none;
@@ -675,41 +658,6 @@ def main():
                       "shown_reports", "active_report_id", "_backfilled"]:
                 st.session_state.pop(k, None)
             st.rerun()
-
-    # --- Search bar / input (at the TOP of main area) ---
-    prompt = st.chat_input("Message SentinelARC...")
-    if prompt:
-        # Add user message to history immediately so it appears below the input
-        st.session_state["chat_history"].append({"type": "user", "content": prompt.strip()})
-
-        if st.session_state.get("mode") == "General AI":
-            try:
-                # We render the response below the input but we need to rerun to keep history order
-                # Actually, Streamlit will render the chat message here, then we append to history
-                with st.chat_message("assistant"):
-                    full_response = st.write_stream(trigger_general_ai(
-                        prompt.strip(),
-                        st.session_state.get("ai_model", "llama3.1:8b"),
-                        st.session_state["chat_history"],
-                        st.session_state.get("user_id")
-                    ))
-                st.session_state["chat_history"].append({"type": "assistant", "content": full_response})
-                st.rerun()
-            except Exception as e:
-                st.error(f"General AI request failed: {e}")
-        else:
-            if st.session_state.get("is_researching"):
-                st.warning("Please wait for the current research to finish!")
-            else:
-                try:
-                    # Set spinner flag FIRST, then call API, then rerun → spinner appears immediately
-                    st.session_state["is_researching"] = True
-                    st.session_state["poll_count"] = 0
-                    st.session_state["pending_query"] = prompt.strip()
-                    st.rerun()  # This rerun shows the spinner before the API call blocks
-                except Exception as e:
-                    st.session_state["is_researching"] = False
-                    st.error(f"Failed to start research: {e}")
 
 
     # ── helpers ──────────────────────────────────────────────────────────
@@ -860,6 +808,41 @@ def main():
     if new_report_found:
         st.rerun()
 
+    # --- TOP SEARCH BAR ---
+    st.markdown('<div class="top-search-container">', unsafe_allow_html=True)
+    top_query = st.text_input("🔍 Search literature or ask SentinelARC...", key="top_search_input", placeholder="Enter your research query...")
+    if top_query and top_query.strip() != st.session_state.get("last_query"):
+        st.session_state["last_query"] = top_query.strip()
+        prompt = top_query.strip()
+        # Add user message to history
+        st.session_state["chat_history"].append({"type": "user", "content": prompt})
+        
+        if st.session_state.get("mode") == "General AI":
+            # Logic for general chat (streaming)
+            st.session_state["chat_history"].append({"type": "assistant", "content": ""})
+            placeholder = st.empty()
+            full_resp = ""
+            for chunk in trigger_general_ai(prompt, st.session_state.get("ai_model", "llama3.1:8b"), 
+                                            st.session_state["chat_history"][:-1], user_id):
+                full_resp += chunk
+                placeholder.markdown(full_resp + "▌")
+            st.session_state["chat_history"][-1]["content"] = full_resp
+            placeholder.markdown(full_resp)
+            st.rerun()
+        else:
+            # Logic for research swarm
+            try:
+                trigger_research(prompt, user_id)
+                st.session_state["is_researching"] = True
+                # Create a task flag file so refresh mid-task restores the spinner
+                with open(f"output/active_task_{user_id}.flag", "w") as f:
+                    f.write(prompt)
+                st.toast("🚀 Research Swarm activated! Monitoring progress...")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to start research: {e}")
+    st.markdown('</div>', unsafe_allow_html=True)
+
     # Render history
     for idx, item in enumerate(st.session_state["chat_history"]):
         if item["type"] == "user":
@@ -927,7 +910,21 @@ def main():
                     st.error("Request timed out. Check terminal logs.")
                 st.rerun()
 
-    # Handle the deferred API call for research (set in the chat input block at top)
+        else:
+            if st.session_state.get("is_researching"):
+                st.warning("Please wait for the current research to finish!")
+            else:
+                try:
+                    # Set spinner flag FIRST, then call API, then rerun → spinner appears immediately
+                    st.session_state["is_researching"] = True
+                    st.session_state["poll_count"] = 0
+                    st.session_state["pending_query"] = prompt.strip()
+                    st.rerun()  # This rerun shows the spinner before the API call blocks
+                except Exception as e:
+                    st.session_state["is_researching"] = False
+                    st.error(f"Failed to start research: {e}")
+
+    # Handle the deferred API call for research (set in the block above on previous rerun)
     if st.session_state.get("is_researching") and st.session_state.get("pending_query"):
         pending = st.session_state.pop("pending_query", None)
         if pending:
