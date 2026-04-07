@@ -116,22 +116,16 @@ class AsyncFactCheckerAgent(AsyncBaseAgent, MCPClientMixin):
             validation_results = []
             total_claims = len(claims)
             
-            for i, claim in enumerate(claims):
-                logger.debug(f"[{self.agent_id}] Validating claim {i+1}/{total_claims}: '{claim}'")
-                
-                is_valid, confidence, evidence = await self._validate_claim_async(claim)
-                
-                validation_results.append({
-                    "claim": claim,
-                    "is_valid": is_valid,
-                    "confidence": confidence,
-                    "evidence": evidence,
-                    "claim_index": i + 1
-                })
-                
-                # Update progress
-                progress = 10.0 + (80.0 * (i + 1) / total_claims)
-                await self._send_status_update(f"validated_claim_{i+1}", progress, task_id)
+            # Process claims in parallel with a concurrency limit
+            semaphore = asyncio.Semaphore(3)  # Limit to 3 concurrent Ollama calls
+            
+            async def validate_with_semaphore(claim_text, index):
+                async with semaphore:
+                    res = await self._validate_claim_async(claim_text)
+                    return {"claim": claim_text, "is_valid": res[0], "confidence": res[1], "evidence": res[2], "claim_index": index + 1}
+
+            tasks = [validate_with_semaphore(claim, i) for i, claim in enumerate(claims)]
+            validation_results = await asyncio.gather(*tasks)
             
             # Calculate overall confidence
             if validation_results:
@@ -218,7 +212,7 @@ class AsyncFactCheckerAgent(AsyncBaseAgent, MCPClientMixin):
             logger.info(f"[{self.agent_id}] Consulting Ollama for claim: '{claim[:50]}...'")
             
             response = ollama.chat(
-                model='llama3.1:8b',
+                model='qwen2.5:1.5b',
                 messages=[
                     {
                         'role': 'system',

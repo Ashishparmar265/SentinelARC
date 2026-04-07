@@ -44,7 +44,7 @@ class AsyncSearchAgent(AsyncBaseAgent):
                 "Limit your response to ONLY the search string. No explanations."
             )
             response = ollama.chat(
-                model='llama3.1:8b',
+                model='qwen2.5:1.5b',
                 messages=[
                     {
                         'role': 'system',
@@ -187,7 +187,7 @@ class AsyncSearchAgent(AsyncBaseAgent):
                     
                     rerank_response = await asyncio.to_thread(
                         ollama.chat,
-                        model='llama3.1:8b',
+                        model='qwen2.5:1.5b',
                         messages=[{'role': 'user', 'content': rerank_prompt}],
                         options={'temperature': 0.1, 'num_thread': 8}
                     )

@@ -223,7 +223,7 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
             # HOP 1: Decompose query
             decomposition_response = await asyncio.to_thread(
                 ollama.chat,
-                model='llama3.1:8b',
+                model='qwen2.5:1.5b',
                 messages=[{
                     'role': 'system',
                     'content': 'You are a research question composer. Break down the user question into exactly 3 modular sub-questions that need to be answered to fully resolve the prompt. Return them on separate lines starting with a dash. No conversational fluff.'
@@ -240,7 +240,7 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
             for i, sub_q in enumerate(sub_questions[:3]):
                 ans_resp = await asyncio.to_thread(
                     ollama.chat,
-                    model='llama3.1:8b',
+                    model='qwen2.5:1.5b',
                     messages=[{
                         'role': 'system',
                         'content': f"You are a tight-scoped data analyst. Answer the sub-question based ONLY on the excerpts below. If not found, output 'Not enough data'.\n\nEXCERPTS:\n{content_snippets}"
