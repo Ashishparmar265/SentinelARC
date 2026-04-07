@@ -385,7 +385,7 @@ def main():
             background-color: #ffffff;
             border-right: 1px solid #e2e8f0;
             box-shadow: 2px 0 10px rgba(0,0,0,0.02);
-            min-width: 320px !important;
+            min-width: 260px !important;
             display: flex !important;
           }
           /* Hide the collapse arrow button */
@@ -398,31 +398,6 @@ def main():
             margin-left: 0 !important;
             visibility: visible !important;
             display: flex !important;
-          }
-          
-          /* Main content area – restore natural layout */
-          section.main > div.block-container {
-            padding: 2rem 3rem !important;
-            overflow-y: auto !important;
-            height: 100vh !important;
-            max-width: none !important;
-            margin: 0 !important;
-          }
-          
-          /* Centered Content Column – applies to all blocks except the sidebar */
-          section.main div[data-testid="stVerticalBlock"] > div {
-              max-width: 1100px;
-              margin: 0 auto;
-          }
-          
-          /* Sidebar isolation */
-          section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] {
-              max-width: none !important;
-              margin: 0 !important;
-              padding: 0 !important;
-          }
-          section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] > div {
-              max-width: none !important;
           }
           
           /* Sidebar Buttons */
@@ -466,8 +441,8 @@ def main():
             margin-bottom: 8px;
           }
 
-          /* Containers / Cards – only in main area */
-          section.main div[data-testid="stVerticalBlockBorderWrapper"] {
+          /* Containers / Cards */
+          div[data-testid="stVerticalBlock"] > div > div[data-testid="stVerticalBlockBorderWrapper"] {
             background: #ffffff;
             border-radius: 16px;
             border: 1px solid #e2e8f0;
@@ -476,7 +451,7 @@ def main():
             margin-bottom: 24px;
             transition: box-shadow 0.3s ease, transform 0.3s ease;
           }
-          section.main div[data-testid="stVerticalBlockBorderWrapper"]:hover {
+          div[data-testid="stVerticalBlockBorderWrapper"]:hover {
             box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.05);
             transform: translateY(-2px);
           }
@@ -502,10 +477,8 @@ def main():
           h1, h2, h3 { color: #0f172a !important; letter-spacing: -0.02em; }
           h3 { font-size: 1.25rem; margin-bottom: 1rem; color: #1e293b; border-bottom: 2px solid #f1f5f9; padding-bottom: 0.5rem; }
           
-          /* Chat Input – align with content */
+          /* Chat Input */
           div[data-testid="stChatInput"] {
-            max-width: 1100px !important;
-            margin: 0 auto !important;
             border-radius: 12px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.05);
             border: 1px solid #cbd5e1;
@@ -567,22 +540,48 @@ def main():
           }
           
           /* Top-Right Profile Rectangle */
-          /* Target the specific block container relative to the viewport */
+          /* Target only the specific vertical block that contains our marker */
           div[data-testid="stVerticalBlock"]:has(div.top-right-profile-marker) {
             position: fixed !important;
             top: 1rem !important;
-            right: 2rem !important;
-            z-index: 10001 !important;
+            right: 1.5rem !important;
+            z-index: 10001 !important; /* Higher than everything else */
             background: rgba(255, 255, 255, 0.98) !important;
-            backdrop-filter: blur(12px) !important;
-            padding: 10px 16px !important;
+            backdrop-filter: blur(10px) !important;
+            padding: 10px 16px !important; /* Slightly more compact */
             border-radius: 12px !important;
-            border: 1px solid #cbd5e1 !important;
-            box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1) !important;
+            border: 1px solid #e2e8f0 !important;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1) !important;
             width: auto !important;
             min-width: 140px !important;
+            height: auto !important;
           }
-          .top-right-profile-marker { display: none; }
+          
+          /* Main content padding-right to avoid profile overlap */
+          .stAppViewMain .block-container {
+              padding-right: 200px !important;
+              max-width: 98% !important;
+          }
+          
+          /* Fix for small screens / collapsed sidebar */
+          @media (max-width: 768px) {
+              .stAppViewMain .block-container {
+                  padding-right: 1rem !important;
+              }
+              div[data-testid="stVerticalBlock"]:has(div.top-right-profile-marker) {
+                  position: static !important;
+                  margin-bottom: 1rem;
+                  width: 100% !important;
+              }
+          }
+
+          /* Ensure widgets inside don't have extra margins */
+          div[data-testid="stVerticalBlock"]:has(div.top-right-profile-marker) div[data-testid="stVerticalBlock"] {
+              gap: 0.5rem !important;
+          }
+          .top-right-profile-marker {
+              display: none;
+          }
 
         </style>
         """,
