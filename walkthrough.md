@@ -12,3 +12,10 @@ We've completely overhauled the main dashboard layout to prioritize focus and in
 - **Search at the Top**: Relocated the search bar to the very top of the content area. It now stays pinned naturally as the first item you see, directly above your research results.
 - **Perfect Rectangle Alignment**: The search bar now matches the exact width of your research cards (1100px max-width), creating a cohesive vertical stack.
 - **Fluid Document Flow**: The search bar is no longer fixed to the bottom of the screen; it now exists as a natural part of the scrollable conversation, making it feel like a true "header" for your research.
+
+## 15. Centered Workspace & Top Search Bar 🏛️
+The dashboard now features a focused, high-productivity layout:
+- **Centered Content Rectangle**: The main research area is now a clean white rectangle (1000px wide) centered in the middle of the dashboard. This creates a focused workspace and eliminates large, distracting side gutters.
+- **Top-Positioned Search**: Following your feedback, the search input has been moved from the far bottom to the **very top** of the content rectangle.
+- **Perfect Alignment**: The search bar is now perfectly aligned with the width of the research report cards below it, creating a unified vertical column of information.
+- **Distraction-Free**: The default bottom-pinned chat input has been removed to maximize vertical space for your reports.

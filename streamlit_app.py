@@ -910,35 +910,6 @@ def main():
                     st.error("Request timed out. Check terminal logs.")
                 st.rerun()
 
-        else:
-            if st.session_state.get("is_researching"):
-                st.warning("Please wait for the current research to finish!")
-            else:
-                try:
-                    # Set spinner flag FIRST, then call API, then rerun → spinner appears immediately
-                    st.session_state["is_researching"] = True
-                    st.session_state["poll_count"] = 0
-                    st.session_state["pending_query"] = prompt.strip()
-                    st.rerun()  # This rerun shows the spinner before the API call blocks
-                except Exception as e:
-                    st.session_state["is_researching"] = False
-                    st.error(f"Failed to start research: {e}")
-
-    # Handle the deferred API call for research (set in the block above on previous rerun)
-    if st.session_state.get("is_researching") and st.session_state.get("pending_query"):
-        pending = st.session_state.pop("pending_query", None)
-        if pending:
-            try:
-                trigger_research(pending, user_id)
-                # Write a persistent flag so the spinner can survive a page refresh
-                os.makedirs("output", exist_ok=True)
-                with open(f"output/active_task_{user_id}.flag", "w") as _f:
-                    _f.write(pending)
-                st.toast("🔬 Agents are researching... results will appear automatically.")
-            except Exception as e:
-                st.session_state["is_researching"] = False
-                st.error(f"Failed to start research: {e}")
-
 
 if __name__ == "__main__":
     main()
