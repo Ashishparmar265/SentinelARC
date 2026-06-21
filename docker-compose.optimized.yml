@@ -73,11 +73,12 @@ services:
       context: .
       dockerfile: docker/agents.Dockerfile
     container_name: synapse-agents
+    privileged: true
     restart: always
     ports:
       - "8000:8000"
     environment:
-      - RABBITMQ_URL=amqp://synapse:synapse123@rabbitmq:5672/
+      - RABBITMQ_URL=amqp://synapse:synapse123@127.0.0.1:5673/
       - PRIMARY_TOOLING_URL=http://primary-tooling-server:8001
       - FILESYSTEM_URL=http://filesystem-server:8002
     volumes:
@@ -86,6 +87,7 @@ services:
       - ./output:/app/output
       - ./temp:/app/temp
       - ./logs:/app/logs
+      - ./experimental_snapshots:/snapshots
     depends_on:
       primary-tooling-server:
         condition: service_healthy

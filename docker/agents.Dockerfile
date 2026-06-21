@@ -41,6 +41,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     xdg-utils \
     curl \
+    criu \
+    build-essential \
+    iproute2 \
+    iptables \
+    netcat-openbsd \
+    libbsd-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 20 (for npx and Playwright)
@@ -66,10 +72,17 @@ COPY src/ ./src/
 COPY async_main.py .
 
 # Create directories for volumes
-RUN mkdir -p /app/output /app/temp /app/logs
+RUN mkdir -p /app/output /app/temp /app/logs /snapshots
+
+# Install phantom supervisor interceptor
+COPY phantom-supervisor/interceptor.cpp /app/
+COPY phantom-supervisor/lifecycle_manager.sh /app/
+RUN g++ -O3 -std=c++11 -pthread /app/interceptor.cpp -o /app/interceptor \
+    && chmod +x /app/lifecycle_manager.sh
 
 # Expose port (optional, but good practice)
 EXPOSE 8000
+EXPOSE 9000
 
 # Install zstd (required by Ollama installer)
 RUN apt-get update && apt-get install -y zstd && rm -rf /var/lib/apt/lists/*
@@ -78,5 +91,5 @@ RUN apt-get update && apt-get install -y zstd && rm -rf /var/lib/apt/lists/*
 # Pull model during build (server starts temporarily, pulls, then stops)
 RUN ollama serve & sleep 10 && ollama pull llama3.1:8b && pkill ollama
 
-# Run the application
-CMD ["python", "async_main.py"]
+# Run the interceptor proxy in background, then start the agents
+CMD ["sh", "-c", "/app/interceptor & sleep 2 && python async_main.py"]

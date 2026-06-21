@@ -1,0 +1,26 @@
+services:
+  phantom-agent:
+    build: .
+    container_name: phantom-agent
+    privileged: true
+    cap_add:
+      - SYS_PTRACE
+      - CHECKPOINT_RESTORE # Note: Might not be recognized by all compose versions, but privileged covers it.
+    ports:
+      - "8080:8080" # Exposed directly for Phase 1 testing
+      - "9000:9000" # Exposed for Interceptor
+    volumes:
+      - /home/iiitl/experimental_snapshots:/snapshots
+      - .:/app
+    networks:
+      phantom-net:
+        ipv4_address: 172.21.0.2
+    # Ensure standard output is attached
+    tty: true
+
+networks:
+  phantom-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
