@@ -81,6 +81,8 @@ services:
       - RABBITMQ_URL=amqp://synapse:synapse123@127.0.0.1:5673/
       - PRIMARY_TOOLING_URL=http://primary-tooling-server:8001
       - FILESYSTEM_URL=http://filesystem-server:8002
+    env_file:
+      - .env
     volumes:
       - ./src:/app/src
       - ./async_main.py:/app/async_main.py

@@ -6,8 +6,9 @@ Now uses Ollama for intelligent summarization and content generation.
 
 import logging
 import asyncio
-import ollama
+import os
 from typing import Dict, List
+from groq import AsyncGroq
 from .async_base_agent import AsyncBaseAgent
 from ..protocols.acp_schema import (
     ACPMessage, ACPMsgType, TaskAssignPayload, StatusUpdatePayload,
@@ -21,7 +22,7 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
     Asynchronous agent that synthesizes research findings into comprehensive reports.
     
     Features:
-    - Ollama-powered generation of introduction, source analysis, and conclusions
+    - Groq-powered generation of conversational responses
     - Progress status updates to orchestrator
     - Structured Markdown report with metadata
     - Graceful error handling and fallback text
@@ -31,7 +32,14 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
         """Initialize the async synthesis agent."""
         super().__init__(agent_id, message_bus, mcp_servers)
         self.orchestrator_id = "orchestrator"
-        logger.info(f"[{self.agent_id}] Async Synthesis Agent initialized")
+        
+        # Initialize Groq client
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key:
+            logger.warning(f"[{self.agent_id}] GROQ_API_KEY not found in environment!")
+        self.groq_client = AsyncGroq(api_key=api_key)
+        
+        logger.info(f"[{self.agent_id}] Async Synthesis Agent initialized with Groq")
 
     async def handle_message(self, message: ACPMessage):
         """Handle incoming ACP messages."""
@@ -60,7 +68,7 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
             await self._send_error_status(str(e))
 
     async def _synthesize_research_report(self, task_data: Dict, task_id: str = None):
-        """Synthesize research findings into a comprehensive report using Ollama."""
+        """Synthesize research findings into a conversational summary using Groq."""
         query = task_data.get("query", "unknown")
         search_results = task_data.get("search_results", [])
         extracted_content = task_data.get("extracted_content", [])
@@ -72,41 +80,48 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
             await self._send_error_status(error_msg, task_id)
             return
 
-        logger.info(f"[{self.agent_id}] Starting synthesis for: '{query}' (task: {task_id})")
+        logger.info(f"[{self.agent_id}] Starting conversational synthesis for: '{query}' (task: {task_id})")
 
         try:
             # Send initial status
             await self._send_status_update("synthesis_starting", 10.0, task_id)
 
-            report_sections = []
+            # Build source context for the LLM
+            await self._send_status_update("analyzing_sources", 30.0, task_id)
+            context_blocks = []
+            successful = [c for c in extracted_content if c.get("content")]
+            for i, c in enumerate(successful):
+                title = c.get("title", "Untitled")
+                url = c.get("url", "#")
+                # Truncate content to avoid token limits, but give enough for synthesis
+                text = c.get("content", "")[:1500] 
+                context_blocks.append(f"Source {i+1}: {title}\nURL: {url}\nContent: {text}")
 
-            # 1. Introduction
-            await self._send_status_update("creating_introduction", 20.0, task_id)
-            intro = await self._create_introduction(query)
-            report_sections.append(f"## Introduction\n\n{intro}")
+            context_str = "\n\n".join(context_blocks)
 
-            # 2. Source Analysis
-            await self._send_status_update("analyzing_sources", 40.0, task_id)
-            # Analyze all sources that have content (real or fallback)
-            for i, content in enumerate(extracted_content):
-                if content.get("content"):
-                    section = await self._create_source_analysis(content, i + 1)
-                    report_sections.append(section)
+            system_prompt = (
+                "You are SentinelARC, an intelligent, conversational research assistant. "
+                "Your goal is to directly answer the user's query using the provided source material. "
+                "1. Analyze the user's intent: If they want a list of papers, provide a clear bulleted list. If they ask a direct question, provide a concise, direct answer. If they want a deep dive, provide a thorough conversational synthesis. "
+                "2. Write in a conversational, accessible, and professional tone, exactly like ChatGPT. DO NOT output a rigid academic report with forced sections (no 'Introduction', 'Methodology', etc. unless requested). "
+                "3. CRITICAL REQUIREMENT: Whenever you mention a paper, concept, or fact from the sources, you MUST include a clickable Markdown link inline. Format it as [Paper Title](URL). Do not list sources at the very end; embed them natively into your sentences as citations. "
+                "4. If the sources do not contain the answer, politely state that the information was not found in the current search results, but provide whatever relevant context you can."
+            )
 
-            # 3. Synthesis and Conclusions
-            await self._send_status_update("creating_synthesis", 70.0, task_id)
-            conclusion = await self._create_conclusion(query, extracted_content)
-            report_sections.append(f"## Synthesis and Conclusions\n\n{conclusion}")
+            await self._send_status_update("creating_synthesis", 60.0, task_id)
+            
+            # Generate conversational response using Groq
+            response = await self.groq_client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"User Query: {query}\n\nAvailable Sources:\n{context_str}"}
+                ],
+                temperature=0.4,
+                max_tokens=2048
+            )
 
-            # 4. Methodology and Metadata (keep static)
-            await self._send_status_update("adding_metadata", 90.0, task_id)
-            methodology = await self._create_methodology(search_results, extracted_content)
-            metadata = await self._create_metadata(search_results, extracted_content)
-            report_sections.append(f"## Research Methodology\n\n{methodology}")
-            report_sections.append(f"## Research Metadata\n\n{metadata}")
-
-            # Combine into final report
-            full_report = f"# Research Report: {query}\n\n" + "\n\n".join(report_sections)
+            full_report = response.choices[0].message.content.strip()
 
             logger.info(f"[{self.agent_id}] Synthesis completed: {len(full_report.split())} words")
 
@@ -117,8 +132,8 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
             synthesis_data = {
                 "report_content": full_report,
                 "word_count": len(full_report.split()),
-                "sections": len(report_sections),
-                "sources_analyzed": len([c for c in extracted_content if c.get("extraction_successful", False)]),
+                "sections": 1,
+                "sources_analyzed": len(successful),
                 "query": query
             }
 
@@ -140,7 +155,7 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
                 msg_type=ACPMsgType.LOG_BROADCAST,
                 payload=LogBroadcastPayload(
                     level="INFO",
-                    message=f"Research report synthesized: {len(full_report.split())} words, {len(extracted_content)} sources",
+                    message=f"Conversational response synthesized: {len(full_report.split())} words, {len(successful)} sources",
                     component=self.agent_id
                 ).model_dump()
             )
@@ -150,167 +165,6 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
             error_msg = f"Synthesis failed: {e}"
             logger.error(f"[{self.agent_id}] {error_msg}")
             await self._send_error_status(error_msg, task_id)
-
-    async def _create_introduction(self, query: str) -> str:
-        """Generate intelligent introduction using Ollama."""
-        try:
-            response = ollama.chat(
-                model='llama3.1:8b',
-                messages=[
-                    {
-                        'role': 'system',
-                        'content': (
-                            "You are an academic writing assistant. "
-                            "Write a concise, professional introduction (150–250 words) for a research report. "
-                            "Include: the research question, why it matters, scope of the synthesis, and what the report covers. "
-                            "Use formal tone, no fluff. Output only the introduction text."
-                        )
-                    },
-                    {
-                        'role': 'user',
-                        'content': f"Research question: {query}"
-                    }
-                ],
-                options={'temperature': 0.4, 'num_thread': 8}
-            )
-            intro = response['message']['content'].strip()
-            logger.info(f"[{self.agent_id}] Introduction generated ({len(intro.split())} words)")
-            return intro
-        except Exception as e:
-            logger.warning(f"[{self.agent_id}] Ollama intro failed: {e}")
-            return f"This report investigates: '{query}'. It synthesizes findings from available academic sources to provide an overview of key developments and implications."
-
-    async def _create_source_analysis(self, content_data: Dict, index: int) -> str:
-        """Generate analysis for one source using Ollama."""
-        url = content_data.get("url", "Unknown source")
-        title = content_data.get("title", "Untitled")
-        content = content_data.get("content", "")[:3000]  # truncate to avoid token limits
-
-        try:
-            response = ollama.chat(
-                model='llama3.1:8b',
-                messages=[
-                    {
-                        'role': 'system',
-                        'content': (
-                            "You are an academic analyst. "
-                            "Summarize the provided source content in 3–5 bullet points. "
-                            "Focus on key findings, methods, and relevance to the research question. "
-                            "Use formal tone. Output only the bullet points."
-                        )
-                    },
-                    {
-                        'role': 'user',
-                        'content': f"Source title: {title}\nURL: {url}\n\nContent:\n{content}"
-                    }
-                ],
-                options={'temperature': 0.4, 'num_thread': 8}
-            )
-            analysis = response['message']['content'].strip()
-            logger.info(f"[{self.agent_id}] Source {index} analysis generated ({len(analysis.split())} words)")
-        except Exception as e:
-            logger.warning(f"[{self.agent_id}] Ollama source analysis failed: {e}")
-            analysis = "• Summary generation failed for this source.\n• Raw content is available in the full report."
-
-        return f"## Source {index}: {title}\n\n[Link]({url})\n\n{analysis}"
-
-    async def _create_conclusion(self, query: str, extracted_content: List[Dict]) -> str:
-        """Generate synthesis using a Multi-Hop RAG framework."""
-        successful = [c for c in extracted_content if c.get("content")]
-        content_snippets = "\n\n".join([f"Source: {c.get('title')}\nContent: {c.get('content', '')[:1200]}" for c in successful[:5]])  # up to 5 sources
-        
-        try:
-            # HOP 1: Decompose query
-            decomposition_response = await asyncio.to_thread(
-                ollama.chat,
-                model='qwen2.5:1.5b',
-                messages=[{
-                    'role': 'system',
-                    'content': 'You are a research question composer. Break down the user question into exactly 3 modular sub-questions that need to be answered to fully resolve the prompt. Return them on separate lines starting with a dash. No conversational fluff.'
-                }, {
-                    'role': 'user',
-                    'content': query
-                }]
-            )
-            sub_questions = [q.strip("- ") for q in decomposition_response['message']['content'].strip().split("\n") if q.strip()]
-            logger.info(f"[{self.agent_id}] Multi-Hop RAG Decomposed: {sub_questions}")
-
-            # HOP 2: Iterative Answering
-            sub_answers = []
-            for i, sub_q in enumerate(sub_questions[:3]):
-                ans_resp = await asyncio.to_thread(
-                    ollama.chat,
-                    model='qwen2.5:1.5b',
-                    messages=[{
-                        'role': 'system',
-                        'content': f"You are a tight-scoped data analyst. Answer the sub-question based ONLY on the excerpts below. If not found, output 'Not enough data'.\n\nEXCERPTS:\n{content_snippets}"
-                    }, {
-                        'role': 'user',
-                        'content': sub_q
-                    }],
-                    options={'temperature': 0.1, 'num_thread': 8}
-                )
-                sub_answers.append(f"**{sub_q}**\n{ans_resp['message']['content'].strip()}")
-            
-            # HOP 3: Unification
-            combined_context = "\n\n".join(sub_answers)
-            response = await asyncio.to_thread(
-                ollama.chat,
-                model='llama3.1:8b',
-                messages=[
-                    {
-                        'role': 'system',
-                        'content': (
-                            "You are an academic synthesizer. "
-                            "Write concise conclusions (250–350 words) bridging the provided multi-hop data points. "
-                            "Include: main findings, synthesis of sub-questions, and suggested future research. "
-                            "Use a highly formal academic tone."
-                        )
-                    },
-                    {
-                        'role': 'user',
-                        'content': f"Core Research Question: {query}\n\nMulti-Hop Answers:\n{combined_context}"
-                    }
-                ],
-                options={'temperature': 0.4, 'num_thread': 8}
-            )
-            conclusion = response['message']['content'].strip()
-            
-            # Append the decomposed roadmap to the conclusion for visibility
-            final_output = f"{conclusion}\n\n### RAG Sub-Query Traces\n*The orchestrator decomposed your prompt to query the texts on these highly-focused vectors:*\n\n" + "\n\n".join([f"- {sq}" for sq in sub_answers])
-            
-            logger.info(f"[{self.agent_id}] Multi-Hop Conclusion generated ({len(final_output.split())} words)")
-            return final_output
-        except Exception as e:
-            logger.warning(f"[{self.agent_id}] Ollama Multi-Hop conclusion failed: {e}")
-            return f"Based on {len(successful)} sources, this report highlights key trends in '{query}'. Further research is recommended."
-
-    # Keep these static sections unchanged
-    async def _create_methodology(self, search_results: List[Dict], extracted_content: List[Dict]) -> str:
-        return f"""**Research Methodology**:
-This report was generated through:
-1. Semantic Scholar search yielding {len(search_results)} results
-2. Content extraction from {len([c for c in extracted_content if c.get("extraction_successful", False)])} sources
-3. LLM-powered synthesis using Ollama (llama3.1:8b)
-4. Structured formatting into Markdown report"""
-
-    async def _create_metadata(self, search_results: List[Dict], extracted_content: List[Dict]) -> str:
-        # Use all results that have some content (either real extraction or fallback abstract)
-        successful = [c for c in extracted_content if c.get("content")]
-        total_words = sum(len(c.get("content", "").split()) for c in successful)
-        
-        # Format sources with the bullet point character '•' that the dashboard expects
-        source_list = "\n".join([f"• [{c.get('title', 'Untitled')}]({c.get('url', '#')})" for c in successful])
-
-        return f"""**Research Statistics**:
-- Sources Analyzed: {len(successful)}
-- Total Words Processed: {total_words:,}
-- Search Results Found: {len(search_results)}
-
-**Sources**:
-{source_list}
-
-**Generation Date**: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')} IST"""
 
     async def _send_status_update(self, status: str, progress: float = None, task_id: str = None):
         status_message = self.create_message(

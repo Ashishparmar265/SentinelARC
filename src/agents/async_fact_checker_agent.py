@@ -4,6 +4,7 @@ Uses Ollama for intelligent fact verification.
 """
 
 import logging
+import asyncio
 import re
 import ollama
 from typing import Dict, List, Tuple

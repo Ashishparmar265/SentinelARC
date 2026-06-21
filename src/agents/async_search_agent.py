@@ -2,7 +2,6 @@ import logging
 import asyncio
 import requests
 import os
-import ollama
 from typing import Dict, List
 from .async_base_agent import AsyncBaseAgent
 from ..protocols.acp_schema import (
@@ -32,9 +31,11 @@ class AsyncSearchAgent(AsyncBaseAgent):
         task_id = task_data.get("task_id", "unknown")
         logger.info(f"[{self.agent_id}] 📡 Researching (Semantic Scholar): '{query}'")
 
-        # Query expansion with Ollama
-        logger.info(f"[{self.agent_id}] Expanding query with Ollama...")
+        # Query expansion with Groq
+        logger.info(f"[{self.agent_id}] Expanding query with Groq...")
         try:
+            from groq import Groq
+            client = Groq(api_key=os.getenv("GROQ_API_KEY"))
             system_prompt = (
                 "You are an expert academic research librarian. "
                 "Your task is to take a user's research query and expand it into a high-quality search string for Semantic Scholar. "
@@ -43,25 +44,22 @@ class AsyncSearchAgent(AsyncBaseAgent):
                 "Provide a search string using Boolean operators (AND, OR) and quotes for phrases. "
                 "Limit your response to ONLY the search string. No explanations."
             )
-            response = ollama.chat(
-                model='qwen2.5:1.5b',
+            response = client.chat.completions.create(
+                model="llama-3.1-8b-instant",
                 messages=[
-                    {
-                        'role': 'system',
-                        'content': system_prompt
-                    },
-                    {
-                        'role': 'user',
-                        'content': query
-                    }
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": query}
                 ],
-                options={'temperature': 0.3, 'num_thread': 8}  # Low creativity for precision, limited threads
+                temperature=0.1
             )
-            expanded_query = response['message']['content'].strip()
+            expanded_query = response.choices[0].message.content.strip()
+            # Remove any surrounding quotes that the LLM might have added
+            if expanded_query.startswith('"') and expanded_query.endswith('"'):
+                expanded_query = expanded_query[1:-1]
             logger.info(f"[{self.agent_id}] Original query: {query}")
             logger.info(f"[{self.agent_id}] Expanded query: {expanded_query}")
         except Exception as e:
-            logger.warning(f"[{self.agent_id}] Ollama expansion failed: {e}. Using original query.")
+            logger.warning(f"[{self.agent_id}] Groq expansion failed: {e}. Using original query.")
             expanded_query = query
 
         try:
@@ -169,7 +167,7 @@ class AsyncSearchAgent(AsyncBaseAgent):
                             
             # --- PHASE 2: CROSS-ENCODER RERANKING ---
             if len(papers) > 0:
-                logger.info(f"[{self.agent_id}] Reranking {len(papers)} papers using Llama 3.1...")
+                logger.info(f"[{self.agent_id}] Reranking {len(papers)} papers using Groq...")
                 try:
                     paper_snippets = ""
                     for i, p in enumerate(papers):
@@ -185,14 +183,16 @@ class AsyncSearchAgent(AsyncBaseAgent):
                         f"{paper_snippets}"
                     )
                     
-                    rerank_response = await asyncio.to_thread(
-                        ollama.chat,
-                        model='qwen2.5:1.5b',
-                        messages=[{'role': 'user', 'content': rerank_prompt}],
-                        options={'temperature': 0.1, 'num_thread': 8}
+                    from groq import Groq
+                    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+                    rerank_response = client.chat.completions.create(
+                        model="llama-3.1-8b-instant",
+                        messages=[{"role": "user", "content": rerank_prompt}],
+                        temperature=0.0
                     )
+                    
                     import json, re
-                    content_str = rerank_response['message']['content']
+                    content_str = rerank_response.choices[0].message.content
                     match = re.search(r'\[[\d,\s]*\]', content_str)
                     if match:
                         relevant_indices = json.loads(match.group(0))
@@ -203,7 +203,7 @@ class AsyncSearchAgent(AsyncBaseAgent):
                         else:
                             logger.warning(f"[{self.agent_id}] Reranking returned 0 matches, ignoring filter.")
                 except Exception as e:
-                    logger.warning(f"[{self.agent_id}] Cross-Encoder Reranking failed: {e}. Passing raw papers.")
+                    logger.warning(f"[{self.agent_id}] Groq Reranking failed: {e}. Passing raw papers.")
 
             # Structured results list for orchestrator/extraction pipeline
             results = []

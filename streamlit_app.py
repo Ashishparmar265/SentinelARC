@@ -161,42 +161,21 @@ def extract_paper_links(markdown_content: str) -> List[Dict[str, str]]:
 
     found: Dict[str, Dict[str, str]] = {}  # url -> {title,url,is_pdf}
 
-    # Try to narrow extraction to the Sources section to reduce false positives.
-    sources_block = None
-    m = re.search(
-        r"(?ims)\*\*Sources\*\*:\s*(.*?)^\*\*Generation Date\*\*",
-        markdown_content,
-        flags=re.MULTILINE,
-    )
-    if m:
-        sources_block = m.group(1)
-    else:
-        sources_block = markdown_content
-
-    # Bullet links: • [Something](https://...)
-    bullet_link_pattern = re.compile(
-        r"•\s*\[([^\]]+)\]\((https?://[^)\s]+)\)",
+    # Find all standard markdown links: [Title](https://...)
+    inline_link_pattern = re.compile(
+        r"\[([^\]]+)\]\((https?://[^)\s]+)\)",
         flags=re.IGNORECASE,
     )
-    for bm in bullet_link_pattern.finditer(sources_block):
-        title = (bm.group(1) or "").strip()
-        url = (bm.group(2) or "").strip()
+    for m in inline_link_pattern.finditer(markdown_content):
+        title = (m.group(1) or "").strip()
+        url = (m.group(2) or "").strip()
         if not url or not url.lower().startswith("http"):
             continue
         is_pdf = url.lower().split("?", 1)[0].endswith(".pdf")
-        found[url] = {"title": title or Path(url).name, "url": url, "is_pdf": str(is_pdf)}
-
-    # Also parse **PDF** lines (common in some reports)
-    pdf_line_pattern = re.compile(
-        r"\*\*PDF\*\*\s*:\s*(https?://\S+?\.pdf\S*)",
-        flags=re.IGNORECASE,
-    )
-    for pm in pdf_line_pattern.finditer(markdown_content):
-        url = (pm.group(1) or "").strip()
-        if not url or not url.lower().startswith("http"):
-            continue
+        
+        # Deduplicate by URL
         if url not in found:
-            found[url] = {"title": Path(url.split("?", 1)[0]).name, "url": url, "is_pdf": "True"}
+            found[url] = {"title": title or Path(url).name, "url": url, "is_pdf": str(is_pdf)}
 
     papers = list(found.values())
     papers.sort(key=lambda x: (x["title"].lower(), x["url"].lower()))
@@ -318,35 +297,13 @@ def build_summary_pdf_bytes(markdown_content: str, report_title: str) -> bytes:
 
 def extract_summary_from_report(markdown_content: str) -> str:
     """
-    Extract a concise "summary" section from the report markdown.
-
-    Heuristics:
-    - Prefer "## Synthesis and Conclusions" section.
-    - Fall back to "## Introduction" section.
-    - Otherwise, return the first chunk of the report.
+    Since the backend now provides conversational answers (like ChatGPT), 
+    we just return the full text without needing to strip out academic headers.
     """
     if not markdown_content:
         return ""
-
-    # Prefer synthesis/conclusions
-    m = re.search(
-        r"(?ims)^##\s+Synthesis\s+and\s+Conclusions\s*$.*?(?=^##\s+)",
-        markdown_content,
-    )
-    if m:
-        # Keep markdown formatting but remove leading/trailing whitespace
-        return m.group(0).strip()
-
-    # Fall back to introduction
-    m = re.search(
-        r"(?ims)^##\s+Introduction\s*$.*?(?=^##\s+|^#\s)",
-        markdown_content,
-    )
-    if m:
-        return m.group(0).strip()
-
-    # Final fallback
-    return markdown_content.strip()[:1500]
+    
+    return markdown_content.strip()
 
 
 def main():
@@ -540,8 +497,8 @@ def main():
           }
           
           /* Top-Right Profile Rectangle */
-          /* Target only the specific vertical block that contains our marker */
-          div[data-testid="stVerticalBlock"]:has(div.top-right-profile-marker) {
+          /* Target only the innermost vertical block that contains our marker */
+          div[data-testid="stVerticalBlock"]:has(div.top-right-profile-marker):not(:has(div[data-testid="stVerticalBlock"])) {
             position: fixed !important;
             top: 1rem !important;
             right: 1.5rem !important;
@@ -555,6 +512,8 @@ def main():
             width: auto !important;
             min-width: 140px !important;
             height: auto !important;
+            margin: 0 !important;
+            transform: none !important;
           }
           
           /* Main content alignment & spacing */
@@ -576,14 +535,22 @@ def main():
           
           /* Style the new top search container */
           .top-search-container {
-              margin-bottom: 2rem;
+              margin: 0 auto 2rem auto;
+              max-width: 800px;
               padding-bottom: 1rem;
-              border-bottom: 1px solid #f1f5f9;
           }
 
-          /* Ensure widgets inside don't have extra margins */
-          div[data-testid="stVerticalBlock"]:has(div.top-right-profile-marker) div[data-testid="stVerticalBlock"] {
-              gap: 0.5rem !important;
+          /* Modern Centered Pill Search Input */
+          div[data-testid="stChatInput"] {
+              border-radius: 30px !important;
+              border: 1px solid #e2e8f0 !important;
+              box-shadow: 0 4px 10px rgba(0,0,0,0.05) !important;
+              padding: 0px 15px !important;
+          }
+          
+          div[data-testid="stChatInput"]:focus-within {
+              border-color: #3b82f6 !important;
+              box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2) !important;
           }
 
 
@@ -663,25 +630,36 @@ def main():
     # ── helpers ──────────────────────────────────────────────────────────
     user_id = st.session_state.get("user_id")
 
-    def _backfill_reports_from_disk():
+    def _backfill_reports_from_disk(active_query="(Recovered — query unknown)"):
         """Scan on-disk report files and register any that are not yet in the DB."""
         from src.database import SessionLocal, Report
         from pathlib import Path as _P
         user_dir = _P("output/reports") / str(user_id)
+        print(f"BACKFILL: user_dir is {user_dir}, exists={user_dir.exists()}")
         if not user_dir.exists():
             return
         db = SessionLocal()
         existing_paths = {r.file_path for r in db.query(Report).filter(Report.user_id == user_id).all()}
+        print(f"BACKFILL: existing_paths for user {user_id} = {existing_paths}")
+        
         for f in user_dir.glob("research_report_*.md"):
             fp = str(f)
+            print(f"BACKFILL: found file {fp}")
             if fp not in existing_paths:
-                new_r = Report(user_id=user_id, file_path=fp, query="(Recovered — query unknown)")
+                print(f"BACKFILL: Inserting {fp} into DB")
+                new_r = Report(user_id=user_id, file_path=fp, query=active_query)
                 db.add(new_r)
+            else:
+                print(f"BACKFILL: {fp} already in DB")
         db.commit()
         db.close()
 
-    # Run the backfill once per session
-    if not st.session_state.get("_backfilled"):
+    # Always backfill if we are actively researching, otherwise once per session
+    if st.session_state.get("is_researching"):
+        print(f"BACKFILL: is_researching is True, calling backfill for user {user_id}")
+        _backfill_reports_from_disk(st.session_state.get("last_query", "(Recovered — query unknown)"))
+    elif not st.session_state.get("_backfilled"):
+        print(f"BACKFILL: initial backfill for user {user_id}")
         _backfill_reports_from_disk()
         st.session_state["_backfilled"] = True
 
@@ -782,11 +760,26 @@ def main():
     # than shown_reports it means we're mid-task, so restore the spinner.
     if not st.session_state.get("is_researching"):
         # Check if there's an active research task (a query marker file)
-        import glob
+        import os
         task_file = f"output/active_task_{user_id}.flag"
         if os.path.exists(task_file):
-            st.session_state["is_researching"] = True
-            st.session_state["poll_count"] = 0
+            # Check if any report was generated AFTER this flag was created
+            task_time = os.path.getmtime(task_file)
+            search_is_done = False
+            for rep_id, query, fpath in all_reports:
+                if os.path.exists(fpath) and os.path.getmtime(fpath) > task_time:
+                    search_is_done = True
+                    break
+            
+            if search_is_done:
+                try:
+                    os.remove(task_file)
+                except OSError:
+                    pass
+            else:
+                st.session_state["is_researching"] = True
+                st.session_state["poll_count"] = 0
+
 
 
     # Auto-detect freshly completed reports from the DB and append to current view
@@ -799,7 +792,7 @@ def main():
             new_report_found = True
             if st.session_state.get("is_researching"):
                 st.session_state["is_researching"] = False
-                # Clean up the persisted flag file when research completes
+                import os
                 task_flag = f"output/active_task_{user_id}.flag"
                 if os.path.exists(task_flag):
                     os.remove(task_flag)
@@ -865,35 +858,7 @@ def main():
                         st.caption(f"Research Report: {path.name}")
                         if summary_md:
                             st.markdown(summary_md)
-                        
-                        if papers:
-                            # User requested maximum 5, minimum 2 papers (the agent returns 5-10 usually)
-                            display_papers = papers[:5]
-                            st.markdown("---")
-                            st.markdown(f"**Sources Found ({len(display_papers)})**")
-                            # Direct paper links for the user
-                            for p in display_papers:
-                                st.markdown(f"• [{p.get('title', 'Paper')}]({p['url']})")
-                        
-                        # In-card actions
-                        col1, col2 = st.columns([1, 1])
-                        with col1:
-                            if st.button(f"Generate PDF", key=f"gen_{idx}", use_container_width=True):
-                                pdf_bytes = build_summary_pdf_bytes(content, report_title=path.name)
-                                st.session_state[f"pdf_{idx}"] = pdf_bytes
-                                st.rerun()
-                        
-                        with col2:
-                            pdf_bytes = st.session_state.get(f"pdf_{idx}")
-                            if pdf_bytes:
-                                st.download_button(
-                                    "Download Analysis PDF",
-                                    data=pdf_bytes,
-                                    file_name=f"analysis_{path.stem}.pdf",
-                                    mime="application/pdf",
-                                    key=f"dl_{idx}",
-                                    use_container_width=True
-                                )
+
             else:
                 with st.chat_message("assistant"):
                     st.warning(f"Report file `{path.name}` not found or still generating...")
@@ -901,14 +866,28 @@ def main():
 
     if st.session_state.get("is_researching"):
         with st.chat_message("assistant"):
-            with st.spinner("Researching in background (fetching and synthesizing sources)..."):
-                import time
-                time.sleep(2)
-                st.session_state["poll_count"] = st.session_state.get("poll_count", 0) + 1
-                if st.session_state["poll_count"] > 900: # Timeout after 30 minutes
+            col1, col2 = st.columns([0.8, 0.2])
+            with col1:
+                with st.spinner("Researching in background (fetching and synthesizing sources)..."):
+                    import time
+                    time.sleep(2)
+                    st.session_state["poll_count"] = st.session_state.get("poll_count", 0) + 1
+                    if st.session_state["poll_count"] > 900: # Timeout after 30 minutes
+                        st.session_state["is_researching"] = False
+                        st.error("Request timed out. Check terminal logs.")
+            with col2:
+                if st.button("🛑 Stop Search", key="stop_search_btn", use_container_width=True):
                     st.session_state["is_researching"] = False
-                    st.error("Request timed out. Check terminal logs.")
-                st.rerun()
+                    import glob
+                    import os
+                    for f in glob.glob("output/active_task_*.flag"):
+                        try:
+                            # Use global os module
+                            os.remove(f)
+                        except OSError:
+                            pass
+                    st.rerun()
+            st.rerun()
 
 
 if __name__ == "__main__":
