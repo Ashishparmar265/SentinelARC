@@ -1,73 +1,62 @@
-# SentinelARC - Autonomous AI Research Swarm
+# SentinelARC
 
-**SentinelARC** is a high-performance, production-ready async multi-agent framework engineered for automated, precision academic research and synthesis. It leverages an advanced C++ micro-architecture for extreme process density and features a beautifully designed, modern frontend dashboard.
+SentinelARC is a highly scalable, asynchronous multi-agent framework designed for automated academic research and synthesis. The system coordinates specialized AI agents to handle literature review, content extraction, and factual verification.
 
-> **🚀 One-Line Pitch**: Delivering automated end-to-end literature review, intelligent content extraction, and verified factual synthesis—powered by specialized async AI agents with sub-millisecond cold starts.
+To support high-density deployments, SentinelARC introduces a custom C++ runtime based on CRIU (Checkpoint/Restore In Userspace) that dynamically swaps idle agents to disk, significantly reducing memory footprint while maintaining low latency.
 
----
+## Key Features
 
-## 🌟 Key Innovations & Professional Highlights
+* **High-Density Agent Runtime (Phantom Supervisor):** Uses CRIU to checkpoint and restore idle Python agents. Reclaims RAM from idle processes, increasing container density.
+* **AMQP Connection Proxy:** A C++ interceptor proxy maintains persistent RabbitMQ connections and injects heartbeats while agents are suspended to disk.
+* **Asynchronous Microservices:** Fully async Python backend utilizing FastAPI and RabbitMQ for message routing.
+* **Streamlit Dashboard:** Integrated frontend interface for managing active research tasks and toggling between General AI and Swarm intelligence modes.
 
-SentinelARC demonstrates senior-level autonomous system engineering with a strict focus on scale, bounds, UI/UX, and observability:
-
-- **Phantom Supervisor (CRIU Integration)**: A custom C++ backend infrastructure that solves the serverless cold-start problem. It dynamically freezes idle AI agents to disk, reclaiming 100% of RAM and unlocking **10x higher deployment density**. 
-- **AMQP Heartbeat Proxy**: A transparent C++ proxy (Interceptor) intercepts persistent RabbitMQ connections, injecting fake heartbeats while agents sleep, allowing instant, zero-drop resurrection when new tasks arrive.
-- **Premium SaaS UI**: A fully overhauled Streamlit dashboard featuring custom CSS, a persistent sidebar Control Center, a floating top-right profile overlay, and a centralized pill-shaped search interface for maximum usability.
-- **Scalability & Security**: Full Docker containerization, ready for Kubernetes deployment, built over robust RabbitMQ message pooling with an end-to-end MLOps monitoring stack.
-
-## 🏗️ System Architecture
-
-Our agent ecosystem integrates horizontally scalable microservices to coordinate complex extraction tasks dynamically, heavily optimized for zero-waste idle memory via our custom runtime.
+## Architecture
 
 ```mermaid
 flowchart TD
-    UI[SentinelARC Dashboard\n(Streamlit UI)] <-->|HTTP API| FAST[FastAPI MCP Server]
-    FAST -.->|Task Dispatch| RMQ[(RabbitMQ Message Bus)]
+    UI["SentinelARC Dashboard"] <-->|HTTP API| FAST["FastAPI MCP Server"]
+    FAST -.->|Task Dispatch| RMQ[("RabbitMQ Message Bus")]
     
     subgraph Phantom Supervisor Runtime
-        PROXY[C++ AMQP Interceptor\n(Fake Heartbeats)]
-        CRIU[Lifecycle Manager\n(criu dump/restore)]
+        PROXY["C++ AMQP Interceptor"]
+        CRIU["Lifecycle Manager (CRIU)"]
         
         subgraph Python AI Swarm
-            ORC[Orchestrator Agent]
-            SA[Search Authority]
-            EX[Extraction Node]
+            ORC["Orchestrator Agent"]
+            SA["Search Authority"]
+            EX["Extraction Node"]
         end
     end
     
-    RMQ <-->|TCP Connection| PROXY
-    PROXY <-->|Local Proxy| ORC
+    RMQ <-->|TCP:5672| PROXY
+    PROXY <-->|TCP:5673| ORC
     PROXY -.->|Triggers Freeze/Thaw| CRIU
     CRIU -.->|Manages Process Memory| ORC
 ```
 
-## 🎥 Screenshots & UI Experience
-
-*Experience the responsive, highly-polished Streamlit UI featuring dynamic mode toggling (General AI vs. Research AI), centralized conversational interfaces, and intelligent session persistence.*
-![SentinelARC Platform GUI Demo](https://via.placeholder.com/900x450.png?text=SentinelARC+Live+Dashboard+Coming+Soon!)
-
-## ⚡ Quick Start: Zero to Running in 60 Seconds
+## Getting Started
 
 ### Prerequisites
-- Docker and Docker Compose
-- Git
-- Python 3.10+ (for local scripts)
+* Docker and Docker Compose
+* Git
+* Python 3.10+ (for local scripts)
 
-### Production Deployment
+### Running Locally
 
 ```bash
-# 1. Clone the repository
+# Clone the repository
 git clone https://github.com/Ashishparmar265/SentinelARC.git
 cd SentinelARC
 
-# 2. Deploy with optimized configuration (Builds Phantom proxy & agents)
+# Deploy infrastructure and build agents
 docker-compose -f docker-compose.optimized.yml up --build -d
 
-# 3. Launch the Professional UI Dashboard locally
+# Launch the frontend
 streamlit run streamlit_app.py
 ```
 
-## 📁 Repository Map
+## Project Structure
 
 ```text
 SentinelARC/
@@ -76,26 +65,17 @@ SentinelARC/
 │   ├── agents/              # Specialized async AI workers
 │   ├── mcp_servers/         # Production REST interfaces
 │   └── database.py          # State and report management
-├── docs/                    # Extensive technical blueprints
-├── streamlit_app.py         # Premium frontend application
-└── docker-compose.optimized.yml # Production infrastructure definition
+├── docs/                    # Architectural documentation
+├── streamlit_app.py         # Frontend application
+└── docker-compose.optimized.yml # Infrastructure definition
 ```
 
-## 🔬 Technical Documentation & Workflows
+## Documentation
 
-**Core Implementation Specs:**
-- **[🏛️ System Architecture](docs/ARCHITECTURE.md)**: Deep dive into physical nodes, deployment topologies, and Phantom Supervisor.
-- **[👻 Phantom Supervisor Integration](Phantom_Supervisor_Integration.md)**: Detailed breakdown of the AMQP Fake-Heartbeat Proxy solution.
-- **[✅ System Validation Report](SYSTEM_VALIDATION_REPORT.md)**: Production readiness certification and QA matrix.
+* [System Architecture](docs/ARCHITECTURE.md): Detailed infrastructure topology and CRIU integration.
+* [Phantom Supervisor Integration](Phantom_Supervisor_Integration.md): Technical breakdown of the AMQP heartbeat proxy.
+* [System Validation Report](SYSTEM_VALIDATION_REPORT.md): Load testing and QA validation results.
 
----
+## License
 
-## 🎉 Project Completion Status
-
-**🚀 PRODUCTION READY - FULLY VALIDATED** ✅
-
-SentinelARC has undergone stringent Quality Assurance validating absolute repository health, scalable orchestration, and 100% workflow success rates. The newly integrated Phantom Supervisor allows unparalleled container scaling, while the UI overhaul provides a flawless end-user experience. 
-
-## 📜 License
-
-MIT License - see [LICENSE](LICENSE) for details.
+This project is licensed under the MIT License - see [LICENSE](LICENSE) for details.
