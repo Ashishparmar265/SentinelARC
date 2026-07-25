@@ -2,17 +2,6 @@
 
 **SentinelARC** (formerly Synapse Scholar) is a high-performance, production-ready async multi-agent framework engineered for automated, precision academic research and synthesis.
 
-> **🚀 One-Line Pitch**: Delivering automated end-to-end literature review, intelligent content extraction, and verified factual synthesis—powered by 7 specialized async AI agents operating under 4 seconds.
-
----
-
-## 🌟 Why It Matters (For Recruiters)
-This isn't a standard student project or API wrapper. SentinelARC demonstrates senior-level autonomous system engineering with focus on scale, bounds, and observability:
-- **Scalability**: Full Docker containerization with Kubernetes deployability and robust RabbitMQ message pooling.
-- **Security Protocols**: Native implementation of MCP Roots architecture enforcing strict filesystem boundary access.
-- **Enterprise Observability**: End-to-end MLOps monitoring stack built with Prometheus and Grafana dashboards.
-- **Resource Efficiency**: Optimized service profiles capped underneath **131MB** of memory per process.
-- **Phantom Supervisor (CRIU)**: Deep kernel-level integration that dynamically freezes idle AI agents to disk, reclaiming 100% of RAM and unlocking **10x higher deployment density** while preserving active AMQP connections.
 
 ## 📊 Performance Metrics
 
@@ -44,10 +33,7 @@ flowchart TD
     RMQ -.-> FastAPI
 ```
 
-## 🎥 Screenshots & Demo Video
 
-![SentinelARC Platform GUI Demo](https://via.placeholder.com/900x450.png?text=SentinelARC+Live+Dashboard+Coming+Soon!)
-*(GUI demo walkthrough placeholder - local development via Streamlit)*
 
 ## ⚡ Quick Start: Zero to Running in 60 Seconds
 
