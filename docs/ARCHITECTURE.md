@@ -8,40 +8,55 @@ SentinelARC is designed as a highly scalable, event-driven architecture that sep
 
 ```mermaid
 flowchart TD
-    subgraph Client Layer
-        UI["Streamlit Dashboard"]
-    end
-    
-    subgraph API Layer
-        API["FastAPI MCP Server"]
-        DB[("SQLite / PostgreSQL")]
-    end
-    
-    subgraph Message Broker
-        RMQ[("RabbitMQ Event Bus")]
-    end
-    
-    subgraph Phantom Supervisor Node
-        PROXY["C++ Interceptor Proxy (Port 5673)"]
-        CRIU["Lifecycle Manager (CRIU)"]
-        
-        subgraph Python AI Swarm
-            ORC["Orchestrator Agent"]
-            SA["Search Authority"]
-            EX["Extraction Node"]
-            SYN["Synthesis Engine"]
-        end
+    %% Styles
+    classDef frontend fill:#2b303a,color:#fff,stroke:#d64933,stroke-width:2px;
+    classDef backend fill:#4281a4,color:#fff,stroke:#fff,stroke-width:2px;
+    classDef broker fill:#f59e0b,color:#fff,stroke:#d97706,stroke-width:2px;
+    classDef cpp fill:#ef4444,color:#fff,stroke:#b91c1c,stroke-width:2px;
+    classDef python fill:#6366f1,color:#fff,stroke:#4f46e5,stroke-width:2px;
+    classDef storage fill:#64748b,color:#fff,stroke:#475569,stroke-width:2px;
+
+    UI["SentinelARC Dashboard (Streamlit)"]:::frontend
+    FAST["FastAPI MCP Server"]:::backend
+    DB[("State Database")]:::storage
+    RMQ[("RabbitMQ Message Bus")]:::broker
+
+    UI <-->|HTTP / REST| FAST
+    FAST <-->|Reads/Writes| DB
+    FAST <-->|Publishes Tasks| RMQ
+
+    subgraph Phantom_Supervisor["Phantom Supervisor Runtime (C++)"]
+        PROXY["C++ AMQP Interceptor (Fake Heartbeats)"]:::cpp
+        CRIU["CRIU Lifecycle Manager"]:::cpp
     end
 
-    UI <-->|HTTP/REST| API
-    API <--> DB
-    API <-->|AMQP Publication| RMQ
-    
+    subgraph AI_Swarm["Async AI Swarm (Python)"]
+        ORC["Orchestrator Agent"]:::python
+        SA["Search Authority"]:::python
+        EX["Extraction Node"]:::python
+        FC["Fact-Checker Agent"]:::python
+        SYN["Synthesis Engine"]:::python
+        FS["File Save Agent"]:::python
+        LOG["Logger Agent"]:::python
+        
+        ORC <-->|Delegates Search| SA
+        SA <-->|Passes URLs| EX
+        EX <-->|Sends Content| FC
+        FC <-->|Verified Facts| SYN
+        SYN <-->|Final Report| FS
+        
+        SA -.->|Telemetry| LOG
+        EX -.->|Telemetry| LOG
+        FC -.->|Telemetry| LOG
+        SYN -.->|Telemetry| LOG
+    end
+
     RMQ <-->|TCP:5672| PROXY
-    PROXY <-->|Transparent Forwarding| ORC
+    PROXY <-->|TCP:5673 (Transparent Proxy)| ORC
     
-    PROXY -.->|Fake Heartbeats| RMQ
-    CRIU -.->|Freeze/Thaw| ORC
+    PROXY -.->|1. Idle Timeout? Trigger Freeze| CRIU
+    PROXY -.->|2. Inject Heartbeats while Asleep| RMQ
+    CRIU -.->|3. Freeze/Thaw Memory to Disk| AI_Swarm
 ```
 
 ## 2. Component Deep Dive
