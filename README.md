@@ -28,9 +28,9 @@ flowchart TD
     DB[("State Database")]:::storage
     RMQ[("RabbitMQ Message Bus")]:::broker
 
-    UI <-->|HTTP / REST| FAST
-    FAST <-->|Reads/Writes| DB
-    FAST <-->|Publishes Tasks| RMQ
+    UI -->|"HTTP / REST"| FAST
+    FAST -->|"Reads/Writes"| DB
+    FAST -->|"Publishes Tasks"| RMQ
 
     subgraph Phantom_Supervisor["Phantom Supervisor Runtime (C++)"]
         PROXY["C++ AMQP Interceptor (Fake Heartbeats)"]:::cpp
@@ -46,24 +46,24 @@ flowchart TD
         FS["File Save Agent"]:::python
         LOG["Logger Agent"]:::python
         
-        ORC <-->|Delegates Search| SA
-        SA <-->|Passes URLs| EX
-        EX <-->|Sends Content| FC
-        FC <-->|Verified Facts| SYN
-        SYN <-->|Final Report| FS
+        ORC -->|"Delegates Search"| SA
+        SA -->|"Passes URLs"| EX
+        EX -->|"Sends Content"| FC
+        FC -->|"Verified Facts"| SYN
+        SYN -->|"Final Report"| FS
         
-        SA -.->|Telemetry| LOG
-        EX -.->|Telemetry| LOG
-        FC -.->|Telemetry| LOG
-        SYN -.->|Telemetry| LOG
+        SA -.->|"Telemetry"| LOG
+        EX -.->|"Telemetry"| LOG
+        FC -.->|"Telemetry"| LOG
+        SYN -.->|"Telemetry"| LOG
     end
 
-    RMQ <-->|TCP:5672| PROXY
-    PROXY <-->|TCP:5673 (Transparent Proxy)| ORC
+    RMQ <--> PROXY
+    PROXY <--> ORC
     
-    PROXY -.->|1. Idle Timeout? Trigger Freeze| CRIU
-    PROXY -.->|2. Inject Heartbeats while Asleep| RMQ
-    CRIU -.->|3. Freeze/Thaw Memory to Disk| AI_Swarm
+    PROXY -.->|"1. Idle Timeout? Trigger Freeze"| CRIU
+    PROXY -.->|"2. Inject Heartbeats while Asleep"| RMQ
+    CRIU -.->|"3. Freeze/Thaw Memory to Disk"| AI_Swarm
 ```
 
 ## Getting Started
