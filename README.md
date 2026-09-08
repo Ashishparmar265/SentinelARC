@@ -49,6 +49,7 @@ flowchart TD
         ORC -->|"Delegates Search"| SA
         SA -->|"Passes URLs"| EX
         EX -->|"Sends Content"| FC
+        FC -->|"Invalid Facts (Retry)"| EX
         FC -->|"Verified Facts"| SYN
         SYN -->|"Final Report"| FS
         
