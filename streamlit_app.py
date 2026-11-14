@@ -82,7 +82,9 @@ def show_login_page():
 
 def trigger_research(query: str, user_id: int) -> dict:
     """Call the FastAPI /research endpoint."""
-    payload = {"query": query, "user_id": user_id}
+    import time
+    task_id = f"task_{user_id}_{int(time.time())}"
+    payload = {"query": query, "user_id": user_id, "task_id": task_id}
     # Short connect timeout, no read timeout (request returns immediately anyway)
     resp = requests.post(f"{API_URL}/research", json=payload, timeout=(5, None))
     resp.raise_for_status()

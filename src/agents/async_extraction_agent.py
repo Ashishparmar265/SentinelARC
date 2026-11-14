@@ -2,11 +2,15 @@
 Async Extraction Agent
 
 Agent responsible for extracting content from URLs and documents asynchronously.
-Demonstrates async MCP streaming with progress notifications.
+Supports batch extraction, PDF parsing, and CORE open-access paywall bypass.
 """
 
+import asyncio
+import io
 import logging
-from typing import Dict
+import re
+from typing import Dict, List, Any, Optional
+import requests
 
 from .async_base_agent import AsyncBaseAgent, MCPClientMixin
 from ..protocols.acp_schema import (
@@ -16,34 +20,42 @@ from ..protocols.acp_schema import (
 
 logger = logging.getLogger(__name__)
 
+# Known paywalled / academic publisher domains where full text is gated behind logins
+PAYWALLED_DOMAINS = [
+    "sciencedirect.com",
+    "ieee.org",
+    "springer.com",
+    "nature.com",
+    "wiley.com",
+    "tandfonline.com",
+    "acm.org",
+    "oup.com",
+    "jstor.org",
+    "frontiersin.org",
+    "cell.com",
+    "pnas.org"
+]
+
 
 class AsyncExtractionAgent(AsyncBaseAgent, MCPClientMixin):
     """
-    Asynchronous agent that extracts raw text content from URLs and documents.
+    Asynchronous agent that extracts text content from URLs, academic papers, and PDFs.
     
-    This agent demonstrates:
-    - Async MCP streaming with real-time progress notifications
-    - Integration with Primary Tooling MCP Server for content extraction
-    - Progress reporting during long-running operations
-    - Error handling and recovery mechanisms
+    Capabilities:
+    - High-throughput parallel batch extraction
+    - Native PyPDF2 stream parsing for arXiv & open-access PDFs
+    - Automated paywall bypass via CORE API open-access search
+    - Rich abstract fallback to avoid hanging or empty documents
     """
     
     def __init__(self, agent_id: str, message_bus, mcp_servers: Dict[str, str]):
-        """
-        Initialize the async extraction agent.
-        
-        Args:
-            agent_id: Unique identifier for this agent
-            message_bus: RabbitMQ message bus for communication
-            mcp_servers: Dictionary mapping MCP server names to URLs
-        """
         AsyncBaseAgent.__init__(self, agent_id, message_bus, mcp_servers)
         MCPClientMixin.__init__(self)
         
         self.orchestrator_id = "orchestrator"
         self.current_task = None
         
-        logger.info(f"[{self.agent_id}] Async Extraction Agent initialized")
+        logger.info(f"[{self.agent_id}] Async Extraction Agent initialized (Batch & Paywall Bypass enabled)")
     
     async def handle_message(self, message: ACPMessage):
         """Handle incoming ACP messages."""
@@ -52,213 +64,283 @@ class AsyncExtractionAgent(AsyncBaseAgent, MCPClientMixin):
                 await self._handle_task_assignment(message)
             else:
                 logger.warning(f"[{self.agent_id}] Unhandled message type: {message.msg_type.value}")
-                
         except Exception as e:
-            logger.error(f"[{self.agent_id}] Error handling message: {e}")
+            logger.error(f"[{self.agent_id}] Error handling message: {e}", exc_info=True)
     
     async def _handle_task_assignment(self, message: ACPMessage):
         """Handle content extraction task assignments."""
         try:
             payload = TaskAssignPayload(**message.payload)
+            task_type = payload.task_type
+            task_data = payload.task_data
             
-            if payload.task_type == "extract_content":
-                await self._extract_content_from_url(payload.task_data)
+            if task_type == "batch_extract":
+                await self._handle_batch_extraction(task_data)
+            elif task_type == "extract_content":
+                await self._extract_content_from_url(task_data)
             else:
-                logger.warning(f"[{self.agent_id}] Unknown task type: {payload.task_type}")
-                
+                logger.warning(f"[{self.agent_id}] Unknown task type: {task_type}")
         except Exception as e:
-            logger.error(f"[{self.agent_id}] Error in task assignment: {e}")
+            logger.error(f"[{self.agent_id}] Error in task assignment: {e}", exc_info=True)
             await self._send_error_status(str(e))
-    
-    async def _extract_content_from_url(self, task_data: Dict):
-        """Extract content from URL with real-time progress monitoring."""
-        url = task_data.get("url")
+
+    async def _handle_batch_extraction(self, task_data: Dict[str, Any]):
+        """
+        Execute concurrent extraction over a batch of candidate papers.
+        """
         task_id = task_data.get("task_id", "unknown")
-        source_description = task_data.get("source_description", "unknown_source")
+        items = task_data.get("items", []) or task_data.get("sources", [])
         
-        if not url:
-            error_msg = "No URL provided for extraction"
-            logger.error(f"[{self.agent_id}] {error_msg}")
-            await self._send_error_status(error_msg, task_id)
+        if not items:
+            logger.warning(f"[{self.agent_id}] Batch extract received empty item list (task: {task_id})")
+            await self._submit_batch_results([], task_id)
             return
-        
-        logger.info(f"[{self.agent_id}] Starting content extraction from: {url}")
-        
-        try:
-            # Send initial status update
-            await self._send_status_update("extraction_starting", 5.0, task_id)
-            
-            # Prepare extraction parameters
-            extraction_params = {
-                "url": url
-            }
-            
-            logger.debug(f"[{self.agent_id}] Calling MCP extraction tool with params: {extraction_params}")
-            
-            # Create progress callback for streaming updates
-            async def progress_callback(progress_data):
-                """Handle progress updates from MCP streaming."""
-                message = progress_data.get('message', 'Processing...')
-                percentage = progress_data.get('percentage', 0)
-                phase = progress_data.get('phase', 'unknown')
-                
-                # Forward progress to orchestrator
-                status = f"extracting_{phase}: {message}"
-                await self._send_status_update(status, percentage, task_id)
-                
-                logger.debug(f"[{self.agent_id}] Extraction progress: {message} ({percentage}%)")
-            
-            # Call streaming MCP tool with progress notifications
-            result = None
-            
-            # --- PHASE 3: PDF Binary Parsing ---
-            pdf_url = task_data.get("pdf_url")
-            target_url = pdf_url if pdf_url else url
-            if target_url and target_url.lower().endswith('.pdf'):
-                logger.info(f"[{self.agent_id}] Detected PDF. Bypassing MCP DOM scraper for native PyPDF2 stream: {target_url}")
+
+        total_items = len(items)
+        logger.info(f"[{self.agent_id}] 🚀 Starting parallel batch extraction for {total_items} items (task: {task_id})")
+        await self._send_status_update(f"batch_extraction_starting: 0/{total_items}", 5.0, task_id)
+
+        # Concurrency limiter: up to 5 concurrent extraction routines
+        semaphore = asyncio.Semaphore(5)
+        completed_count = 0
+
+        async def _extract_item_safe(item: Dict[str, Any], idx: int) -> Dict[str, Any]:
+            nonlocal completed_count
+            async with semaphore:
                 try:
-                    import PyPDF2
-                    import io
-                    import requests
-                    await self._send_status_update("extracting_pdf", 25.0, task_id)
-                    resp = await asyncio.to_thread(requests.get, target_url, timeout=20)
-                    if resp.status_code == 200:
-                        pdf_file = io.BytesIO(resp.content)
-                        reader = PyPDF2.PdfReader(pdf_file)
-                        extracted_text = []
-                        for i in range(min(15, len(reader.pages))): # extract first 15 pages max
-                            extracted_text.append(reader.pages[i].extract_text() or "")
-                        
-                        pdf_content = "\n".join(extracted_text)
-                        if len(pdf_content.strip()) > 200:
-                            logger.info(f"[{self.agent_id}] Successfully extracted {len(pdf_content)} bytes natively from PDF.")
-                            result = {
-                                "url": target_url, 
-                                "title": f"PDF Document from {target_url}", 
-                                "content": pdf_content, 
-                                "word_count": len(pdf_content.split())
-                            }
-                except Exception as e:
-                    logger.warning(f"[{self.agent_id}] PDF extraction failed: {str(e)}. Falling back to MCP tool.")
-                    
-            if not result:
-                result = await self.call_mcp_tool_streaming(
+                    result = await self._extract_single_candidate(item, task_id)
+                except Exception as ex:
+                    logger.warning(f"[{self.agent_id}] Extraction failed on item {idx}: {ex}")
+                    # Graceful abstract fallback
+                    result = {
+                        "url": item.get("url", ""),
+                        "title": item.get("title", f"Document {idx+1}"),
+                        "content": item.get("abstract", "") or item.get("fallback_abstract", ""),
+                        "word_count": len((item.get("abstract") or "").split()),
+                        "source_description": item.get("source", "scholarly_source"),
+                        "doi": item.get("doi"),
+                        "is_anchor": item.get("is_anchor", False),
+                        "citation_velocity": item.get("citation_velocity", 0.0),
+                        "extraction_successful": bool(item.get("abstract")),
+                        "used_fallback": True,
+                        "error": str(ex)
+                    }
+                
+                completed_count += 1
+                progress_pct = round((completed_count / total_items) * 90.0, 1)
+                await self._send_status_update(
+                    f"batch_extracting: {completed_count}/{total_items} complete", 
+                    progress_pct, 
+                    task_id
+                )
+                return result
+
+        tasks = [_extract_item_safe(item, i) for i, item in enumerate(items)]
+        extracted_batch = await asyncio.gather(*tasks)
+
+        logger.info(f"[{self.agent_id}] ✅ Batch extraction finished: {len(extracted_batch)} documents processed.")
+        await self._send_status_update("batch_extraction_complete", 100.0, task_id)
+        await self._submit_batch_results(extracted_batch, task_id)
+
+    async def _extract_single_candidate(self, item: Dict[str, Any], task_id: str) -> Dict[str, Any]:
+        """Extract a single candidate paper using PDF stream, MCP browse, or CORE bypass."""
+        url = item.get("url", "")
+        pdf_url = item.get("pdf_url") or (url if url and url.lower().endswith(".pdf") else None)
+        title = item.get("title", "")
+        doi = item.get("doi")
+        abstract = item.get("abstract", "") or item.get("fallback_abstract", "")
+        is_anchor = item.get("is_anchor", False)
+        velocity = item.get("citation_velocity", 0.0)
+
+        # 1. Direct PDF parsing (arXiv or direct OA PDF)
+        target_pdf = pdf_url if pdf_url else (url if url and url.lower().endswith(".pdf") else None)
+        if target_pdf:
+            pdf_content = await self._fetch_pdf_text_async(target_pdf)
+            if pdf_content and len(pdf_content.strip()) > 200:
+                return {
+                    "url": target_pdf,
+                    "title": title or f"PDF Document from {target_pdf}",
+                    "content": pdf_content,
+                    "word_count": len(pdf_content.split()),
+                    "source_description": item.get("source", "PDF"),
+                    "doi": doi,
+                    "is_anchor": is_anchor,
+                    "citation_velocity": velocity,
+                    "extraction_successful": True,
+                    "used_fallback": False,
+                    "method": "native_pdf"
+                }
+
+        # 2. Check if domain is paywalled
+        is_paywalled = any(domain in url.lower() for domain in PAYWALLED_DOMAINS) if url else False
+        
+        extracted_text = ""
+        used_mcp = False
+
+        if not is_paywalled and url and url.startswith("http"):
+            try:
+                # Call Primary Tooling MCP browse_and_extract
+                mcp_res = await self.call_mcp_tool(
                     server_name="primary_tooling",
                     tool_name="browse_and_extract",
-                    params=extraction_params,
-                    progress_callback=progress_callback
+                    params={"url": url}
                 )
-            
-            
-            # Process extraction result
-            extracted_url = result.get("url", url)
-            title = result.get("title", f"Content from {url}")
-            content = result.get("content", "")
-            word_count = result.get("word_count", 0)
-            
-            fallback_abstract = task_data.get("fallback_abstract", "")
-            # If extraction failed (mock) or result is very short, use the abstract fallback
-            if len(content.strip()) < 100 and fallback_abstract:
-                logger.info(f"[{self.agent_id}] Extraction result too short. Using abstract fallback for {url}")
-                content = fallback_abstract
-                word_count = len(content.split())
-            
-            logger.info(f"[{self.agent_id}] Extraction completed/fallback: {word_count} words from {url}")
-            
-            # Send completion status
-            await self._send_status_update("extraction_complete", 100.0, task_id)
-            
-            # Prepare data for submission
-            extraction_data = {
-                "url": extracted_url,
-                "title": title,
-                "content": content,
-                "word_count": word_count,
-                "source_description": source_description,
-                "extraction_successful": True,
-                "used_fallback": len(result.get("content", "")) < 100
-            }
-            
-            # Send extracted content to orchestrator
-            data_message = self.create_message(
-                receiver_id=self.orchestrator_id,
-                msg_type=ACPMsgType.DATA_SUBMIT,
-                payload=DataSubmitPayload(
-                    data_type="extracted_content",
-                    data=extraction_data,
-                    source=url,
-                    task_id=task_id
-                ).model_dump()
-            )
-            
-            await self.send_message(data_message)
-            
-            # Broadcast completion log
-            log_message = self.create_message(
-                topic="logs",
-                msg_type=ACPMsgType.LOG_BROADCAST,
-                payload=LogBroadcastPayload(
-                    level="INFO",
-                    message=f"Content extraction complete: {url} ({word_count} words)",
-                    component=self.agent_id
-                ).model_dump()
-            )
-            
-            await self.send_message(log_message)
-            
-            logger.info(f"[{self.agent_id}] Successfully extracted content from {url}")
-            
-        except Exception as e:
-            error_msg = f"Failed to extract content from {url}: {e}"
-            logger.error(f"[{self.agent_id}] {error_msg}")
-            
-            # Send error status to orchestrator
-            await self._send_error_status(error_msg, task_id)
-            
-            # Use fallback abstract if extraction failed entirely
-            fallback_abstract = task_data.get("fallback_abstract", "")
-            if fallback_abstract:
-                logger.info(f"[{self.agent_id}] Extraction failed. Using fallback abstract for {url}")
-                error_msg = f"Web extraction failed, but abstract was used as fallback. Original error: {error_msg}"
-                
-            # Send failed extraction data (with fallback if available)
-            failed_data = {
+                if isinstance(mcp_res, dict):
+                    extracted_text = mcp_res.get("content", "")
+                    used_mcp = True
+            except Exception as e:
+                logger.debug(f"[{self.agent_id}] MCP browse failed for {url}: {e}")
+
+        # 3. Paywall Bypass via CORE Open-Access API
+        if is_paywalled or len(extracted_text.strip()) < 150:
+            logger.info(f"[{self.agent_id}] Gated/short content for '{title[:40]}'. Attempting CORE open-access bypass...")
+            core_content = await self._fetch_core_open_access_text(title, doi)
+            if core_content and len(core_content.strip()) > 200:
+                return {
+                    "url": url,
+                    "title": title,
+                    "content": core_content,
+                    "word_count": len(core_content.split()),
+                    "source_description": f"{item.get('source', 'Web')} (CORE OA)",
+                    "doi": doi,
+                    "is_anchor": is_anchor,
+                    "citation_velocity": velocity,
+                    "extraction_successful": True,
+                    "used_fallback": False,
+                    "method": "core_oa_bypass"
+                }
+
+        # 4. Use MCP extracted text if sufficient
+        if len(extracted_text.strip()) >= 150:
+            return {
                 "url": url,
-                "title": f"Summary: {url}",
-                "content": fallback_abstract or "",
-                "word_count": len(fallback_abstract.split()) if fallback_abstract else 0,
-                "source_description": source_description,
-                "extraction_successful": bool(fallback_abstract),
-                "error_message": error_msg,
-                "used_fallback": True
+                "title": title,
+                "content": extracted_text,
+                "word_count": len(extracted_text.split()),
+                "source_description": item.get("source", "Web"),
+                "doi": doi,
+                "is_anchor": is_anchor,
+                "citation_velocity": velocity,
+                "extraction_successful": True,
+                "used_fallback": False,
+                "method": "mcp_browse"
             }
-            
-            data_message = self.create_message(
-                receiver_id=self.orchestrator_id,
-                msg_type=ACPMsgType.DATA_SUBMIT,
-                payload=DataSubmitPayload(
-                    data_type="extracted_content",
-                    data=failed_data,
-                    source=url,
-                    task_id=task_id
-                ).model_dump()
-            )
-            
-            await self.send_message(data_message)
-            
-            # Broadcast error log
-            error_log = self.create_message(
-                topic="logs",
-                msg_type=ACPMsgType.LOG_BROADCAST,
-                payload=LogBroadcastPayload(
-                    level="ERROR",
-                    message=f"Content extraction failed: {url} - {error_msg}",
-                    component=self.agent_id
-                ).model_dump()
-            )
-            
-            await self.send_message(error_log)
-    
+
+        # 5. Final fallback to rich abstract
+        logger.info(f"[{self.agent_id}] Using abstract fallback for: '{title[:40]}'")
+        final_content = abstract if abstract and len(abstract.strip()) > 30 else f"Paper Title: {title}. Full content gated."
+        return {
+            "url": url or "#",
+            "title": title,
+            "content": final_content,
+            "word_count": len(final_content.split()),
+            "source_description": item.get("source", "Academic Abstract"),
+            "doi": doi,
+            "is_anchor": is_anchor,
+            "citation_velocity": velocity,
+            "extraction_successful": bool(abstract),
+            "used_fallback": True,
+            "method": "abstract_fallback"
+        }
+
+    async def _fetch_pdf_text_async(self, pdf_url: str) -> Optional[str]:
+        """Fetch and extract text from an open PDF asynchronously using PyPDF2."""
+        try:
+            import PyPDF2
+            headers = {"User-Agent": "SentinelARC/2.0 Academic Extractor"}
+            resp = await asyncio.to_thread(requests.get, pdf_url, headers=headers, timeout=15)
+            if resp.status_code == 200 and len(resp.content) > 1000:
+                pdf_file = io.BytesIO(resp.content)
+                reader = PyPDF2.PdfReader(pdf_file)
+                extracted_pages = []
+                # Extract first 12 pages maximum to balance detail and performance
+                max_pages = min(12, len(reader.pages))
+                for i in range(max_pages):
+                    txt = reader.pages[i].extract_text()
+                    if txt:
+                        extracted_pages.append(txt)
+                content = "\n".join(extracted_pages)
+                if len(content.strip()) > 200:
+                    logger.info(f"[{self.agent_id}] Extracted {len(content)} chars from PDF: {pdf_url}")
+                    return content
+        except Exception as e:
+            logger.debug(f"[{self.agent_id}] PDF extraction error on {pdf_url}: {e}")
+        return None
+
+    async def _fetch_core_open_access_text(self, title: str, doi: Optional[str] = None) -> Optional[str]:
+        """Query CORE open-access repository for downloadable full-text PDF or content."""
+        if not title and not doi:
+            return None
+        try:
+            query = f'doi:"{doi}"' if doi else title.replace('"', '').replace(":", " ")
+            url = "https://api.core.ac.uk/v3/search/works"
+            params = {"q": query[:120], "limit": 3}
+            headers = {"User-Agent": "SentinelARC/2.0 Research Extractor"}
+
+            resp = await asyncio.to_thread(requests.get, url, params=params, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                results = data.get("results", [])
+                for r in results:
+                    download_url = r.get("downloadUrl")
+                    if download_url and download_url.startswith("http"):
+                        logger.info(f"[{self.agent_id}] Found CORE OA download URL: {download_url}")
+                        pdf_txt = await self._fetch_pdf_text_async(download_url)
+                        if pdf_txt:
+                            return pdf_txt
+                    # If CORE abstract is richer than what we had
+                    core_abstract = r.get("abstract")
+                    if core_abstract and len(core_abstract) > 300:
+                        return f"CORE Abstract: {core_abstract}"
+        except Exception as e:
+            logger.debug(f"[{self.agent_id}] CORE OA query error: {e}")
+        return None
+
+    async def _submit_batch_results(self, extracted_batch: List[Dict[str, Any]], task_id: str):
+        """Submit the complete batch of extracted content to Orchestrator."""
+        data_message = self.create_message(
+            receiver_id=self.orchestrator_id,
+            msg_type=ACPMsgType.DATA_SUBMIT,
+            payload=DataSubmitPayload(
+                data_type="extracted_content_batch",
+                data={
+                    "items": extracted_batch,
+                    "task_id": task_id,
+                    "total_extracted": len(extracted_batch)
+                },
+                source="batch_extraction_engine",
+                task_id=task_id
+            ).model_dump()
+        )
+        await self.send_message(data_message)
+        logger.info(f"[{self.agent_id}] 📤 Delivered extracted batch ({len(extracted_batch)} docs) to Orchestrator.")
+
+    # Legacy single-URL extraction support for backward compatibility
+    async def _extract_content_from_url(self, task_data: Dict):
+        """Extract content from a single URL."""
+        url = task_data.get("url")
+        task_id = task_data.get("task_id", "unknown")
+        
+        item = {
+            "url": url,
+            "title": task_data.get("title", f"Document from {url}"),
+            "abstract": task_data.get("fallback_abstract", ""),
+            "source": task_data.get("source_description", "Web")
+        }
+        res = await self._extract_single_candidate(item, task_id)
+        
+        data_message = self.create_message(
+            receiver_id=self.orchestrator_id,
+            msg_type=ACPMsgType.DATA_SUBMIT,
+            payload=DataSubmitPayload(
+                data_type="extracted_content",
+                data=res,
+                source=url,
+                task_id=task_id
+            ).model_dump()
+        )
+        await self.send_message(data_message)
+
     async def _send_status_update(self, status: str, progress: float = None, task_id: str = None):
         """Send status update to orchestrator."""
         status_message = self.create_message(
@@ -270,22 +352,20 @@ class AsyncExtractionAgent(AsyncBaseAgent, MCPClientMixin):
                 task_id=task_id
             ).model_dump()
         )
-        
         await self.send_message(status_message)
-        logger.debug(f"[{self.agent_id}] Status update sent: {status}")
-    
+
     async def _send_error_status(self, error_message: str, task_id: str = None):
         """Send error status to orchestrator."""
         await self._send_status_update(f"extraction_failed: {error_message}", 0.0, task_id)
-    
+
     def get_capabilities(self) -> Dict[str, str]:
         """Return agent capabilities."""
         return {
             "agent_type": "extraction_agent",
             "primary_function": "content_extraction",
             "mcp_tools": ["browse_and_extract"],
-            "supported_tasks": ["extract_content"],
+            "supported_tasks": ["batch_extract", "extract_content"],
+            "features": "core_oa_bypass, native_pdf_parsing, parallel_batch",
             "streaming_support": True,
-            "progress_notifications": True,
             "async_capable": True
         }

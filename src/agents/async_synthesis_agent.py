@@ -1,13 +1,14 @@
 """
 Async Synthesis Agent
-Agent responsible for synthesizing research findings into coherent reports asynchronously.
-Now uses Ollama for intelligent summarization and content generation.
+
+Agent responsible for synthesizing research findings into coherent, citation-rich reports.
+Highlights foundational seminal anchor papers and seamlessly falls back across Groq models.
 """
 
 import logging
 import asyncio
 import os
-from typing import Dict, List
+from typing import Dict, List, Any, Optional
 from groq import AsyncGroq
 from .async_base_agent import AsyncBaseAgent
 from ..protocols.acp_schema import (
@@ -17,23 +18,22 @@ from ..protocols.acp_schema import (
 
 logger = logging.getLogger(__name__)
 
+
 class AsyncSynthesisAgent(AsyncBaseAgent):
     """
     Asynchronous agent that synthesizes research findings into comprehensive reports.
     
     Features:
-    - Groq-powered generation of conversational responses
-    - Progress status updates to orchestrator
-    - Structured Markdown report with metadata
-    - Graceful error handling and fallback text
+    - High-velocity anchor paper prioritization
+    - Inline clickable citations [Paper Title](URL)
+    - Groq-powered multi-model fallback (Qwen 2.5/3.8 -> GPT-OSS 20B)
+    - Structured Markdown fallback ensuring zero stalled workflows
     """
 
     def __init__(self, agent_id: str, message_bus, mcp_servers: Dict[str, str]):
-        """Initialize the async synthesis agent."""
         super().__init__(agent_id, message_bus, mcp_servers)
         self.orchestrator_id = "orchestrator"
         
-        # Initialize Groq client
         api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
             logger.warning(f"[{self.agent_id}] GROQ_API_KEY not found in environment!")
@@ -53,10 +53,10 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
             else:
                 logger.warning(f"[{self.agent_id}] Unhandled message type: {message.msg_type.value}")
         except Exception as e:
-            logger.error(f"[{self.agent_id}] Error handling message: {e}")
+            logger.error(f"[{self.agent_id}] Error handling message: {e}", exc_info=True)
 
     async def _handle_task_assignment(self, message: ACPMessage):
-        """Handle synthesis task assignments (legacy support)."""
+        """Handle synthesis task assignments."""
         try:
             payload = TaskAssignPayload(**message.payload)
             if payload.task_type == "synthesize_research":
@@ -64,14 +64,14 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
             else:
                 logger.warning(f"[{self.agent_id}] Unknown task type: {payload.task_type}")
         except Exception as e:
-            logger.error(f"[{self.agent_id}] Error in task assignment: {e}")
+            logger.error(f"[{self.agent_id}] Error in task assignment: {e}", exc_info=True)
             await self._send_error_status(str(e))
 
-    async def _synthesize_research_report(self, task_data: Dict, task_id: str = None):
+    async def _synthesize_research_report(self, task_data: Dict[str, Any], task_id: str = None):
         """Synthesize research findings into a conversational summary using Groq."""
         query = task_data.get("query", "unknown")
         search_results = task_data.get("search_results", [])
-        extracted_content = task_data.get("extracted_content", [])
+        extracted_content = task_data.get("extracted_content", []) or task_data.get("sources", [])
         task_id = task_id or task_data.get("task_id", "unknown")
 
         if not query:
@@ -80,61 +80,114 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
             await self._send_error_status(error_msg, task_id)
             return
 
-        logger.info(f"[{self.agent_id}] Starting conversational synthesis for: '{query}' (task: {task_id})")
+        logger.info(f"[{self.agent_id}] Starting synthesis for: '{query}' (task: {task_id})")
 
         try:
-            # Send initial status
             await self._send_status_update("synthesis_starting", 10.0, task_id)
 
             # Build source context for the LLM
             await self._send_status_update("analyzing_sources", 30.0, task_id)
+            
+            # Combine extracted content with search metadata (for citation metrics)
+            metadata_map = {p.get("url"): p for p in search_results if p.get("url")}
+            
             context_blocks = []
-            successful = [c for c in extracted_content if c.get("content")]
+            successful = [c for c in extracted_content if c.get("content") or c.get("abstract")]
+            
+            # If extracted_content was empty, fall back to search_results
+            if not successful and search_results:
+                successful = search_results
+
             for i, c in enumerate(successful):
-                title = c.get("title", "Untitled")
+                title = c.get("title", f"Document {i+1}")
                 url = c.get("url", "#")
-                # Truncate content to avoid token limits, but give enough for synthesis
-                text = c.get("content", "")[:1500] 
-                context_blocks.append(f"Source {i+1}: {title}\nURL: {url}\nContent: {text}")
+                meta = metadata_map.get(url, c)
+                is_anchor = c.get("is_anchor") or meta.get("is_anchor", False)
+                velocity = c.get("citation_velocity") or meta.get("citation_velocity", 0.0)
+                citations = meta.get("citationCount", 0)
+                year = meta.get("year", "N/A")
+                source_name = c.get("source_description") or meta.get("source", "Academic Catalog")
+
+                badge = " [🏆 SEMINAL ANCHOR PAPER]" if is_anchor else ""
+                metrics_str = f"Year: {year} | Citations: {citations} (Velocity: {velocity}/yr) | Source: {source_name}"
+                
+                text = (c.get("content") or c.get("abstract") or "")[:2000]
+                context_blocks.append(
+                    f"Source {i+1}: {title}{badge}\n"
+                    f"Metadata: {metrics_str}\n"
+                    f"URL: {url}\n"
+                    f"Summary/Excerpt: {text}\n"
+                )
 
             context_str = "\n\n".join(context_blocks)
 
             system_prompt = (
-                "You are SentinelARC, an intelligent, conversational research assistant. "
-                "Your goal is to directly answer the user's query using the provided source material. "
-                "1. Analyze the user's intent: If they want a list of papers, provide a clear bulleted list. If they ask a direct question, provide a concise, direct answer. If they want a deep dive, provide a thorough conversational synthesis. "
-                "2. Write in a conversational, accessible, and professional tone, exactly like ChatGPT. DO NOT output a rigid academic report with forced sections (no 'Introduction', 'Methodology', etc. unless requested). "
-                "3. CRITICAL REQUIREMENT: Whenever you mention a paper, concept, or fact from the sources, you MUST include a clickable Markdown link inline. Format it as [Paper Title](URL). Do not list sources at the very end; embed them natively into your sentences as citations. "
-                "4. If the sources do not contain the answer, politely state that the information was not found in the current search results, but provide whatever relevant context you can."
+                "You are SentinelARC, an elite academic research assistant and scientific intelligence synthesizer. "
+                "Your objective is to provide a comprehensive, rigorous, and highly accessible synthesis directly answering the user's research query.\n\n"
+                "KEY SYNTHESIS GUIDELINES:\n"
+                "1. Structure: Begin with an executive overview, followed by the core technological/scientific mechanisms, comparative analysis of approaches, and emerging frontiers.\n"
+                "2. FOUNDATIONAL WORKS: If any paper is marked with '[🏆 SEMINAL ANCHOR PAPER]', prominently highlight it as the foundational or high-velocity breakthrough that framed the research landscape before discussing derivative works.\n"
+                "3. INLINE CITATIONS: You MUST embed clickable Markdown citations natively in your sentences, formatted as [Paper Title](URL). Do not list plain numbers or relegate citations solely to the end.\n"
+                "4. Tone: Professional, authoritative, and direct (similar to advanced technical literature reviews)."
             )
 
             await self._send_status_update("creating_synthesis", 60.0, task_id)
             
-            # Generate conversational response using Groq
-            response = await self.groq_client.chat.completions.create(
-                model="llama-3.1-8b-instant",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"User Query: {query}\n\nAvailable Sources:\n{context_str}"}
-                ],
-                temperature=0.4,
-                max_tokens=2048
-            )
+            # Primary Groq model with fast fallback
+            groq_model = os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")
+            full_report = ""
 
-            full_report = response.choices[0].message.content.strip()
+            try:
+                response = await self.groq_client.chat.completions.create(
+                    model=groq_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"Research Query: {query}\n\nScholarly Sources & Findings:\n{context_str}"}
+                    ],
+                    temperature=0.3,
+                    max_tokens=3000
+                )
+                full_report = response.choices[0].message.content.strip()
+            except Exception as llm_err:
+                logger.warning(f"[{self.agent_id}] Primary model '{groq_model}' failed: {llm_err}. Trying secondary model 'openai/gpt-oss-20b'...")
+                try:
+                    response = await self.groq_client.chat.completions.create(
+                        model="openai/gpt-oss-20b",
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": f"Research Query: {query}\n\nScholarly Sources & Findings:\n{context_str}"}
+                        ],
+                        temperature=0.3,
+                        max_tokens=3000
+                    )
+                    full_report = response.choices[0].message.content.strip()
+                except Exception as fallback_err:
+                    logger.error(f"[{self.agent_id}] All LLMs failed ({fallback_err}). Compiling structured fallback report.")
+                    report_lines = [
+                        f"# Research Synthesis: {query}\n\n",
+                        f"> ⚠️ **Notice:** Automated conversational synthesis fell back to structured index ({fallback_err}). Below are the verified sources and findings gathered across the multi-agent academic swarm.\n\n",
+                        "## Verified Academic Sources\n\n"
+                    ]
+                    if successful:
+                        for idx, src in enumerate(successful):
+                            s_title = src.get("title", f"Source {idx+1}")
+                            s_url = src.get("url", "#")
+                            s_text = (src.get("content") or src.get("abstract") or "No text available.")[:700]
+                            report_lines.append(f"### {idx+1}. [{s_title}]({s_url})\n\n{s_text}\n\n")
+                    else:
+                        report_lines.append("No extracted sources were available for synthesis.\n")
+                    full_report = "".join(report_lines)
 
-            logger.info(f"[{self.agent_id}] Synthesis completed: {len(full_report.split())} words")
-
-            # Send completion status
+            logger.info(f"[{self.agent_id}] Synthesis complete: {len(full_report.split())} words generated.")
             await self._send_status_update("synthesis_complete", 100.0, task_id)
 
-            # Send report to orchestrator
+            # Send synthesis report to orchestrator
             synthesis_data = {
                 "report_content": full_report,
                 "word_count": len(full_report.split()),
-                "sections": 1,
                 "sources_analyzed": len(successful),
-                "query": query
+                "query": query,
+                "task_id": task_id
             }
 
             data_message = self.create_message(
@@ -143,7 +196,7 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
                 payload=DataSubmitPayload(
                     data_type="synthesis_report",
                     data=synthesis_data,
-                    source="ollama_synthesis",
+                    source="groq_synthesis",
                     task_id=task_id
                 ).model_dump()
             )
@@ -155,7 +208,7 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
                 msg_type=ACPMsgType.LOG_BROADCAST,
                 payload=LogBroadcastPayload(
                     level="INFO",
-                    message=f"Conversational response synthesized: {len(full_report.split())} words, {len(successful)} sources",
+                    message=f"Research synthesis completed: {len(full_report.split())} words across {len(successful)} sources.",
                     component=self.agent_id
                 ).model_dump()
             )
@@ -163,7 +216,7 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
 
         except Exception as e:
             error_msg = f"Synthesis failed: {e}"
-            logger.error(f"[{self.agent_id}] {error_msg}")
+            logger.error(f"[{self.agent_id}] {error_msg}", exc_info=True)
             await self._send_error_status(error_msg, task_id)
 
     async def _send_status_update(self, status: str, progress: float = None, task_id: str = None):
@@ -177,7 +230,16 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
             ).model_dump()
         )
         await self.send_message(status_message)
-        logger.debug(f"[{self.agent_id}] Status update sent: {status}")
 
     async def _send_error_status(self, error_message: str, task_id: str = None):
         await self._send_status_update(f"synthesis_failed: {error_message}", 0.0, task_id)
+
+    def get_capabilities(self) -> Dict[str, str]:
+        """Return agent capabilities."""
+        return {
+            "agent_type": "synthesis_agent",
+            "primary_function": "report_synthesis",
+            "supported_tasks": ["synthesize_research"],
+            "features": "anchor_paper_emphasis, groq_multi_model, inline_markdown_citations",
+            "async_capable": True
+        }

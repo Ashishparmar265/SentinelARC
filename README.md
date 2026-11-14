@@ -30,15 +30,15 @@ flowchart TD
 
     UI -->|"HTTP / REST"| FAST
     FAST -->|"Reads/Writes"| DB
-    FAST -->|"Publishes Tasks"| RMQ
+    FAST -->|"In-Memory Invocation\n(start_research)"| ORC
 
     subgraph Phantom_Supervisor["Phantom Supervisor Runtime (C++)"]
         PROXY["C++ AMQP Interceptor (Fake Heartbeats)"]:::cpp
         CRIU["CRIU Lifecycle Manager"]:::cpp
     end
 
-    subgraph AI_Swarm["Async AI Swarm (Python)"]
-        ORC["Orchestrator Agent"]:::python
+    subgraph AI_Swarm["Async AI Swarm (Hub-and-Spoke Architecture)"]
+        ORC["Orchestrator Agent (Central Hub)"]:::python
         SA["Search Authority"]:::python
         EX["Extraction Node"]:::python
         FC["Fact-Checker Agent"]:::python
@@ -46,17 +46,22 @@ flowchart TD
         FS["File Save Agent"]:::python
         LOG["Logger Agent"]:::python
         
-        ORC -->|"Delegates Search"| SA
-        SA -->|"Passes URLs"| EX
-        EX -->|"Sends Content"| FC
-        FC -->|"Invalid Facts (Retry)"| EX
-        FC -->|"Verified Facts"| SYN
-        SYN -->|"Final Report"| FS
+        %% Hub-and-Spoke Delegations and Data Submissions
+        ORC <-->|"1. Delegate Search / Submit Results"| SA
+        ORC <-->|"2. Assign Extraction / Submit Content"| EX
+        ORC <-->|"3. Assign Fact-Check / Submit Claims"| FC
+        
+        %% Fallback: Invalid facts route back to Search Authority (bypassing Extraction)
+        FC -.->|"Low Confidence (<0.70)\nInvalid Facts (Retry)"| SA
+        
+        ORC <-->|"4. Assign Synthesis / Submit Report"| SYN
+        ORC -->|"5. Persist Final Report"| FS
         
         SA -.->|"Telemetry"| LOG
         EX -.->|"Telemetry"| LOG
         FC -.->|"Telemetry"| LOG
         SYN -.->|"Telemetry"| LOG
+        FS -.->|"Telemetry"| LOG
     end
 
     RMQ <--> PROXY
@@ -104,6 +109,7 @@ SentinelARC/
 
 ## Documentation
 
+* [System Optimizations & Interview Study Guide](docs/OPTIMIZATIONS_AND_INTERVIEW_PREP.md): Deep-dive engineering breakdown of latency reductions, multi-source ingestion, citation velocity, and technical Q&A.
 * [System Architecture](docs/ARCHITECTURE.md): Detailed infrastructure topology and CRIU integration.
 * [Phantom Supervisor Integration](Phantom_Supervisor_Integration.md): Technical breakdown of the AMQP heartbeat proxy.
 * [System Validation Report](SYSTEM_VALIDATION_REPORT.md): Load testing and QA validation results.

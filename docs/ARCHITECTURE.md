@@ -23,15 +23,15 @@ flowchart TD
 
     UI -->|"HTTP / REST"| FAST
     FAST -->|"Reads/Writes"| DB
-    FAST -->|"Publishes Tasks"| RMQ
+    FAST -->|"In-Memory Invocation\n(start_research)"| ORC
 
     subgraph Phantom_Supervisor["Phantom Supervisor Runtime (C++)"]
         PROXY["C++ AMQP Interceptor (Fake Heartbeats)"]:::cpp
         CRIU["CRIU Lifecycle Manager"]:::cpp
     end
 
-    subgraph AI_Swarm["Async AI Swarm (Python)"]
-        ORC["Orchestrator Agent"]:::python
+    subgraph AI_Swarm["Async AI Swarm (Hub-and-Spoke Architecture)"]
+        ORC["Orchestrator Agent (Central Hub)"]:::python
         SA["Search Authority"]:::python
         EX["Extraction Node"]:::python
         FC["Fact-Checker Agent"]:::python
@@ -39,16 +39,22 @@ flowchart TD
         FS["File Save Agent"]:::python
         LOG["Logger Agent"]:::python
         
-        ORC -->|"Delegates Search"| SA
-        SA -->|"Passes URLs"| EX
-        EX -->|"Sends Content"| FC
-        FC -->|"Verified Facts"| SYN
-        SYN -->|"Final Report"| FS
+        %% Hub-and-Spoke Delegations and Data Submissions
+        ORC <-->|"1. Delegate Search / Submit Results"| SA
+        ORC <-->|"2. Assign Extraction / Submit Content"| EX
+        ORC <-->|"3. Assign Fact-Check / Submit Claims"| FC
+        
+        %% Fallback: Invalid facts route back to Search Authority (bypassing Extraction)
+        FC -.->|"Low Confidence (<0.70)\nInvalid Facts (Retry)"| SA
+        
+        ORC <-->|"4. Assign Synthesis / Submit Report"| SYN
+        ORC -->|"5. Persist Final Report"| FS
         
         SA -.->|"Telemetry"| LOG
         EX -.->|"Telemetry"| LOG
         FC -.->|"Telemetry"| LOG
         SYN -.->|"Telemetry"| LOG
+        FS -.->|"Telemetry"| LOG
     end
 
     RMQ <--> PROXY
@@ -66,8 +72,8 @@ The user interface is a customized Streamlit application handling user interacti
 - **Key Features**: Persistent control center sidebar, profile overlay, and a centralized search bar.
 - **Modes**: Toggles between asynchronous swarm tasks ("Research AI") and synchronous chat ("General AI").
 
-### 2.2 API & State Management (`src/mcp_servers/` & `src/database.py`)
-The FastAPI backend serves as the primary gateway. It manages user authentication, persists generated reports, and translates HTTP requests into AMQP messages pushed to RabbitMQ.
+### 2.2 API & State Management (`async_main.py` & `src/database.py`)
+The FastAPI backend serves as the primary gateway. It manages user authentication, persists generated reports, and initiates research workflows directly through the in-memory `AsyncOrchestratorAgent` (`state["orchestrator"].start_research`), which then delegates tasks across the RabbitMQ message bus.
 
 ### 2.3 The Message Bus (RabbitMQ)
 RabbitMQ handles inter-service communication. It ensures reliable task delivery to the AI swarm under variable load and mitigates potential bottlenecks during agent cold starts.

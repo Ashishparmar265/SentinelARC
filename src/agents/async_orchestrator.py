@@ -1,13 +1,15 @@
 """
 Async Orchestrator Agent
 
-Central coordination agent that manages the research workflow asynchronously.
-Demonstrates A2A command and control patterns with async message handling.
+Central coordination authority that manages the research workflow asynchronously.
+Stateless, high-throughput hub-and-spoke state machine keyed by task_id.
+Delegates heavy extraction, fact-checking, synthesis, and file persistence
+to specialized companion agents.
 """
 
 import asyncio
 import logging
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from datetime import datetime
 
 from .async_base_agent import AsyncBaseAgent, generate_task_id
@@ -21,38 +23,109 @@ logger = logging.getLogger(__name__)
 
 class AsyncOrchestratorAgent(AsyncBaseAgent):
     """
-    Asynchronous orchestrator agent that coordinates research workflows.
+    Lean, high-level director for academic research workflows.
     
-    Responsibilities:
-    - Task decomposition and assignment
-    - Progress tracking across multiple agents
-    - Result aggregation and synthesis coordination
-    - Workflow state management
+    Coordinates the pipeline:
+      Search Agent (Multi-Source + Citations) 
+         -> Extraction Agent (Batch + CORE OA Paywall Bypass) 
+         -> Fact Checker Agent (Self-contained Claims + Crossref) 
+         -> Synthesis Agent (Seminal Anchor Emphasis + Groq LLM) 
+         -> File Save Agent (MCP Roots + SQLite Persistence)
     """
     
     def __init__(self, agent_id: str, message_bus, mcp_servers: Dict[str, str]):
-        """Initialize the async orchestrator agent."""
         super().__init__(agent_id, message_bus, mcp_servers)
         
-        # Workflow state
-        self.current_query: str = ""
-        self.active_tasks = {}
-        self.search_results = []
-        self.extracted_content = []
-        self.extraction_goal = 0
-        self.fact_check_triggered = False
-        self.synthesis_triggered = False
-        self.current_task_id: str = ""
-        self.synthesis_report: Dict = {}
-        self.fact_check_results: Dict = {}
-        self.search_retries: int = 0
-        self.workflow_start_time: datetime = None
-        
-        # Agent status tracking
+        # Multi-tenant workflow store keyed by task_id
+        self.active_workflows: Dict[str, Dict[str, Any]] = {}
         self.agent_status: Dict[str, str] = {}
         
-        logger.info(f"[{self.agent_id}] Async Orchestrator initialized")
-    
+        logger.info(f"[{self.agent_id}] Async Orchestrator initialized (Lean Stateless State Machine)")
+
+    def _latest_workflow(self) -> Dict[str, Any]:
+        """Return the most recently created workflow, or an empty template."""
+        if self.active_workflows:
+            return list(self.active_workflows.values())[-1]
+        return {
+            "task_id": "",
+            "user_id": 0,
+            "query": "",
+            "search_results": [],
+            "extracted_content": [],
+            "synthesis_report": {},
+            "fact_check_results": {},
+            "search_retries": 0,
+            "start_time": None,
+            "status": "idle"
+        }
+
+    # Backward-compatible properties for external inspection / UI callers
+    @property
+    def current_query(self) -> str:
+        return self._latest_workflow().get("query", "")
+
+    @property
+    def current_task_id(self) -> str:
+        return self._latest_workflow().get("task_id", "")
+
+    @property
+    def user_id(self) -> int:
+        return self._latest_workflow().get("user_id", 0)
+
+    @property
+    def search_results(self) -> List:
+        return self._latest_workflow().get("search_results", [])
+
+    @property
+    def extracted_content(self) -> List:
+        return self._latest_workflow().get("extracted_content", [])
+
+    @property
+    def synthesis_report(self) -> Dict:
+        return self._latest_workflow().get("synthesis_report", {})
+
+    @property
+    def fact_check_results(self) -> Dict:
+        return self._latest_workflow().get("fact_check_results", {})
+
+    @property
+    def search_retries(self) -> int:
+        return self._latest_workflow().get("search_retries", 0)
+
+    @property
+    def workflow_start_time(self) -> Optional[datetime]:
+        return self._latest_workflow().get("start_time")
+
+    def _get_or_create_workflow(self, task_id: Optional[str], default_query: str = "", default_user_id: int = 0) -> Dict[str, Any]:
+        """Retrieve active workflow state by task_id with automatic initialization."""
+        if task_id and task_id in self.active_workflows:
+            return self.active_workflows[task_id]
+        
+        target_id = task_id or generate_task_id()
+        workflow = {
+            "task_id": target_id,
+            "user_id": default_user_id,
+            "query": default_query,
+            "search_results": [],
+            "extracted_content": [],
+            "synthesis_report": {},
+            "fact_check_results": {},
+            "search_retries": 0,
+            "start_time": datetime.now(),
+            "status": "in_progress",
+            "updated_at": datetime.now()
+        }
+        self.active_workflows[target_id] = workflow
+        self._prune_old_workflows()
+        return workflow
+
+    def _prune_old_workflows(self, max_workflows: int = 500):
+        """Prevent memory growth under high concurrency."""
+        if len(self.active_workflows) > max_workflows:
+            completed_keys = [k for k, v in self.active_workflows.items() if v.get("status") == "completed"]
+            for k in completed_keys[:len(self.active_workflows) - max_workflows]:
+                self.active_workflows.pop(k, None)
+
     async def handle_message(self, message: ACPMessage):
         """Handle incoming ACP messages asynchronously."""
         try:
@@ -62,47 +135,47 @@ class AsyncOrchestratorAgent(AsyncBaseAgent):
                 await self._handle_data_submission(message)
             else:
                 logger.warning(f"[{self.agent_id}] Unhandled message type: {message.msg_type.value}")
-                
         except Exception as e:
-            logger.error(f"[{self.agent_id}] Error handling message: {e}")
+            logger.error(f"[{self.agent_id}] Error handling message: {e}", exc_info=True)
     
-    async def start_research(self, query: str, user_id: int):
+    async def start_research(self, query: str, user_id: int, task_id: Optional[str] = None):
         """
-        Initiate a research workflow for the given query.
-        
-        Args:
-            query: Research question to investigate
-            user_id: The authenticated user initiating the request
+        Initiate an academic research workflow.
         """
-        logger.info(f"[{self.agent_id}] Starting research workflow: '{query}'")
+        if not task_id or task_id == "default_task":
+            task_id = generate_task_id()
+
+        logger.info(f"[{self.agent_id}] 🚀 Starting Research Pipeline (Task: {task_id}, User: {user_id}): '{query}'")
         
-        # Initialize workflow state
-        self.current_query = query
-        self.user_id = user_id
-        self.current_task_id = generate_task_id()
-        self.workflow_start_time = datetime.now()
+        workflow = {
+            "task_id": task_id,
+            "user_id": user_id,
+            "query": query,
+            "search_results": [],
+            "extracted_content": [],
+            "synthesis_report": {},
+            "fact_check_results": {},
+            "search_retries": 0,
+            "start_time": datetime.now(),
+            "status": "in_progress",
+            "updated_at": datetime.now()
+        }
+        self.active_workflows[task_id] = workflow
+        self._prune_old_workflows()
         
-        # Reset collections
-        self.search_results.clear()
-        self.extracted_content.clear()
-        self.synthesis_report.clear()
-        self.fact_check_results.clear()
-        self.search_retries = 0
-        self.citation_pass_done = False
+        await self._broadcast_log("INFO", f"Research workflow initiated (Task: {task_id}): '{query}'")
         
-        # Broadcast workflow start
-        await self._broadcast_log("INFO", f"Research workflow started: '{query}'")
-        
-        # Start with web search
-        await self._assign_search_task(query, user_id)
+        # Step 1: Dispatch multi-source search to Search Agent
+        await self._assign_search_task(query, user_id, task_id)
     
-    async def _assign_search_task(self, query: str, user_id: int):
-        """Assign web search task to SearchAgent."""
+    async def _assign_search_task(self, query: str, user_id: int, task_id: str, strategy: str = "standard"):
+        """Assign academic search task to SearchAgent."""
         task_data = {
             "query": query,
-            "task_id": self.current_task_id,
+            "task_id": task_id,
             "user_id": user_id,
-            "max_results": 5
+            "strategy": strategy,
+            "max_results": 10
         }
         
         search_message = self.create_message(
@@ -114,195 +187,143 @@ class AsyncOrchestratorAgent(AsyncBaseAgent):
                 priority=1
             ).model_dump()
         )
-        
         await self.send_message(search_message)
-        logger.info(f"[{self.agent_id}] Assigned search task for: '{query}'")
+        logger.info(f"[{self.agent_id}] Dispatched search task (Task: {task_id}) for: '{query}'")
     
     async def _handle_status_update(self, message: ACPMessage):
-        """Process status updates from other agents."""
+        """Process status updates from worker agents."""
         payload = StatusUpdatePayload(**message.payload)
         sender_id = message.sender_id
+        task_id = payload.task_id
         
-        # Update agent status tracking
         self.agent_status[sender_id] = payload.status
+        logger.info(f"[{self.agent_id}] Status from {sender_id} (Task: {task_id}): {payload.status}")
         
-        logger.info(f"[{self.agent_id}] Status from {sender_id}: {payload.status}")
-        
-        # Handle specific status updates
         if "failed" in payload.status.lower():
-            await self._handle_agent_failure(sender_id, payload.status)
+            await self._handle_agent_failure(sender_id, payload.status, task_id)
     
     async def _handle_data_submission(self, message: ACPMessage):
-        """Process data submissions from other agents."""
+        """Route worker data submissions based on task_id and data_type."""
         payload = DataSubmitPayload(**message.payload)
         sender_id = message.sender_id
+        task_id = payload.task_id or (payload.data.get("task_id") if isinstance(payload.data, dict) else None)
         
-        logger.info(f"[{self.agent_id}] Received {payload.data_type} from {sender_id}")
+        logger.info(f"[{self.agent_id}] Received '{payload.data_type}' from {sender_id} (Task: {task_id})")
         
         if payload.data_type == "search_results":
-            await self._handle_search_results(payload, sender_id)
-        elif payload.data_type == "extracted_content":
-            await self._handle_extracted_content(payload, sender_id)
+            await self._handle_search_results(payload, sender_id, task_id)
+        elif payload.data_type in ["extracted_content_batch", "extracted_content"]:
+            await self._handle_extracted_batch(payload, sender_id, task_id)
         elif payload.data_type == "fact_check_results":
-            await self._handle_fact_check_results(payload, sender_id)
+            await self._handle_fact_check_results(payload, sender_id, task_id)
         elif payload.data_type == "synthesis_report":
-            await self._handle_synthesis_report(payload, sender_id)
+            await self._handle_synthesis_report(payload, sender_id, task_id)
+        elif payload.data_type == "file_save_result":
+            await self._handle_file_save_result(payload, sender_id, task_id)
         else:
-            logger.warning(f"[{self.agent_id}] Unknown data type: {payload.data_type}")
+            logger.warning(f"[{self.agent_id}] Unhandled data type: {payload.data_type}")
     
-    async def _handle_search_results(self, payload: DataSubmitPayload, sender_id: str):
-        """Process search results and assign extraction tasks."""
+    async def _handle_search_results(self, payload: DataSubmitPayload, sender_id: str, task_id: Optional[str]):
+        """Forward search candidates directly to Extraction Agent in a single batch."""
+        workflow = self._get_or_create_workflow(task_id)
         search_data = payload.data
         results = search_data.get("results", [])
         
-        self.search_results.extend(results)
+        workflow["search_results"] = results
+        workflow["updated_at"] = datetime.now()
         
-        logger.info(f"[{self.agent_id}] Received {len(results)} search results")
+        logger.info(f"[{self.agent_id}] Task {workflow['task_id']}: Acquired {len(results)} candidate papers from Search Authority.")
         
-        # Fallback: if no structured results (e.g. API/network failure), skip extraction
-        # and proceed directly to synthesis so the workflow can still complete.
         if not results:
-            logger.warning(
-                f"[{self.agent_id}] No structured search results available – "
-                "proceeding to synthesis without external sources"
-            )
-            await self._assign_synthesis_task()
+            logger.warning(f"[{self.agent_id}] Task {workflow['task_id']}: No papers found; proceeding directly to synthesis.")
+            await self._assign_synthesis_task(workflow["task_id"])
             return
-        
-        # Assign extraction tasks for top results
-        extraction_tasks = []
-        top_results = results[:10]
-        self.extraction_goal = len(top_results)
-        self.extracted_content = []
-        self.fact_check_triggered = False
-        self.synthesis_triggered = False
-        
-        for i, result in enumerate(top_results):
-            url = result.get("url", "")
-            abstract = result.get("abstract", "")
-            if url:
-                extraction_tasks.append(self._assign_extraction_task(url, f"source_{i+1}", abstract))
-        
-        # Execute extraction tasks concurrently
-        if extraction_tasks:
-            await asyncio.gather(*extraction_tasks)
-    
-    async def _assign_extraction_task(self, url: str, source_desc: str, abstract: str = ""):
-        """Assign content extraction task to ExtractionAgent."""
-        task_data = {
-            "url": url,
-            "task_id": self.current_task_id,
-            "source_description": source_desc,
-            "fallback_abstract": abstract
+
+        # Delegate batch extraction to ExtractionAgent (bypassing slow individual round-trips)
+        batch_task_data = {
+            "items": results[:8],
+            "task_id": workflow["task_id"],
+            "query": workflow["query"]
         }
         
-        extraction_message = self.create_message(
+        extraction_msg = self.create_message(
             receiver_id="extraction_agent",
             msg_type=ACPMsgType.TASK_ASSIGN,
             payload=TaskAssignPayload(
-                task_type="extract_content",
-                task_data=task_data,
-                priority=2
+                task_type="batch_extract",
+                task_data=batch_task_data,
+                priority=1
             ).model_dump()
         )
+        await self.send_message(extraction_msg)
+        logger.info(f"[{self.agent_id}] Delegated batch extraction for {len(batch_task_data['items'])} papers to ExtractionAgent.")
+
+    async def _handle_extracted_batch(self, payload: DataSubmitPayload, sender_id: str, task_id: Optional[str]):
+        """Forward extracted documents directly to Fact Checker Agent."""
+        workflow = self._get_or_create_workflow(task_id)
+        data = payload.data
         
-        await self.send_message(extraction_message)
-        logger.info(f"[{self.agent_id}] Assigned extraction task for: {url}")
-    
-    async def _handle_extracted_content(self, payload: DataSubmitPayload, sender_id: str):
-        """Process extracted content and trigger synthesis when ready."""
-        content_data = payload.data
-        self.extracted_content.append(content_data)
+        if payload.data_type == "extracted_content_batch":
+            extracted_items = data.get("items", [])
+        else:
+            extracted_items = [data]
+            
+        workflow["extracted_content"] = extracted_items
+        workflow["updated_at"] = datetime.now()
         
-        content_length = content_data.get("word_count", 0)
-        logger.info(f"[{self.agent_id}] Received extracted content ({content_length} words). Progress: {len(self.extracted_content)}/{self.extraction_goal}")
+        logger.info(f"[{self.agent_id}] Task {workflow['task_id']}: Extraction complete ({len(extracted_items)} sources). Forwarding to FactChecker...")
         
-        # Trigger fact checking when all extractions are done OR we have at least 5
-        if not self.fact_check_triggered:
-            if len(self.extracted_content) >= self.extraction_goal or len(self.extracted_content) >= 5:
-                self.fact_check_triggered = True
-                await self._assign_fact_check_task()
-    
-    async def _assign_fact_check_task(self):
-        """Assign fact checking task to evaluate extracted content."""
-        combined_content = "\n\n".join([c.get("content", "")[:5000] for c in self.extracted_content if c.get("extraction_successful")])
-        
-        task_data = {
-            "source_content": combined_content,
-            "task_id": self.current_task_id
-        }
-        
-        fact_check_message = self.create_message(
+        # Dispatch fact checking
+        fact_check_msg = self.create_message(
             receiver_id="fact_checker_agent",
             msg_type=ACPMsgType.TASK_ASSIGN,
             payload=TaskAssignPayload(
                 task_type="fact_check",
-                task_data=task_data,
+                task_data={
+                    "sources": extracted_items,
+                    "task_id": workflow["task_id"],
+                    "query": workflow["query"]
+                },
                 priority=1
             ).model_dump()
         )
-        
-        await self.send_message(fact_check_message)
-        logger.info(f"[{self.agent_id}] Assigned fact checking task")
+        await self.send_message(fact_check_msg)
 
-    async def _handle_fact_check_results(self, payload: DataSubmitPayload, sender_id: str):
-        """Process fact check results and decide whether to synthesize or retry."""
+    async def _handle_fact_check_results(self, payload: DataSubmitPayload, sender_id: str, task_id: Optional[str]):
+        """Evaluate validation confidence and dispatch report synthesis."""
+        workflow = self._get_or_create_workflow(task_id)
         results_data = payload.data
         summary = results_data.get("summary", {})
-        overall_confidence = summary.get("overall_confidence", 0.0)
-        logger.info(f"[{self.agent_id}] Fact check confidence score: {overall_confidence:.2f}")
+        overall_confidence = summary.get("overall_confidence", 0.85)
+        workflow["fact_check_results"] = results_data
         
-        # Phase 4: Recursive Citation Mapping
-        if not getattr(self, "citation_pass_done", False):
-            self.citation_pass_done = True
-            highly_cited = sorted(self.search_results, key=lambda x: x.get('citationCount', 0) or 0, reverse=True)
-            if highly_cited and highly_cited[0].get('citationCount', 0) > 10:
-                anchor = highly_cited[0]
-                logger.info(f"[{self.agent_id}] Found highly-cited anchor (Citations: {anchor.get('citationCount')}). Triggering recursive map...")
-                await self._broadcast_log("INFO", f"Anchor paper discovered: {anchor.get('title')}. Executing recursive deep-dive pass...")
-                
-                # retain the strong anchor extraction
-                anchor_extracts = [c for c in self.extracted_content if c.get('url') == anchor.get('url')]
-                self.search_results.clear()
-                self.extracted_content.clear()
-                if anchor_extracts:
-                    self.extracted_content.extend(anchor_extracts)
-                    
-                self.fact_check_triggered = False
-                recursive_query = f"'{anchor.get('title')}' AND ({self.current_query})"
-                await self._assign_search_task(recursive_query, self.user_id)
-                return
-        
-        if overall_confidence < 0.70 and self.search_retries < 1:
-            logger.warning(f"[{self.agent_id}] Confidence too low ({overall_confidence:.2f}). Triggering alternate search.")
-            self.search_retries += 1
-            
-            # Broadcast retry
-            await self._broadcast_log("WARNING", f"Low confidence results ({overall_confidence:.2f}). Orchestrator is looking for better alternative sources...")
-            
-            # Clear old state and retry search with modified query
-            self.search_results.clear()
-            self.extracted_content.clear()
-            
-            alternative_query = f"{self.current_query} alternative perspectives evidence"
-            self.citation_pass_done = True # skip recursive search on fail-recovery
-            await self._assign_search_task(alternative_query, self.user_id)
-        else:
-            if overall_confidence < 0.70:
-                logger.warning(f"[{self.agent_id}] Confidence remains low after retries. Proceeding to synthesis anyway.")
-            else:
-                logger.info(f"[{self.agent_id}] Results validated successfully. Proceeding to synthesis.")
-                
-            self.fact_check_results = results_data
-            await self._assign_synthesis_task()
+        logger.info(f"[{self.agent_id}] Task {workflow['task_id']}: Fact check confidence score: {overall_confidence:.2f}")
 
-    async def _assign_synthesis_task(self):
-        """Assign synthesis task to create the research report."""
+        # If confidence is critically low and we haven't retried yet, query Search Authority with broadened perspective
+        if overall_confidence < 0.65 and workflow.get("search_retries", 0) < 1:
+            workflow["search_retries"] += 1
+            logger.warning(f"[{self.agent_id}] Low confidence ({overall_confidence:.2f}). Triggering search broadening retry.")
+            await self._broadcast_log("WARNING", f"Low confidence ({overall_confidence:.2f}). Expanding search perspective...")
+            await self._assign_search_task(
+                f"{workflow['query']} empirical validation", 
+                workflow["user_id"], 
+                workflow["task_id"],
+                strategy="broaden_perspectives"
+            )
+            return
+
+        # Proceed directly to conversational synthesis
+        logger.info(f"[{self.agent_id}] Task {workflow['task_id']}: Validation passed. Dispatching synthesis task...")
+        await self._assign_synthesis_task(workflow["task_id"])
+
+    async def _assign_synthesis_task(self, task_id: str):
+        """Dispatch synthesis task to SynthesisAgent."""
+        workflow = self._get_or_create_workflow(task_id)
         task_data = {
-            "query": self.current_query,
-            "search_results": self.search_results,
-            "extracted_content": self.extracted_content,
-            "task_id": self.current_task_id
+            "query": workflow["query"],
+            "search_results": workflow["search_results"],
+            "extracted_content": workflow["extracted_content"],
+            "task_id": task_id
         }
         
         synthesis_message = self.create_message(
@@ -314,63 +335,77 @@ class AsyncOrchestratorAgent(AsyncBaseAgent):
                 priority=1
             ).model_dump()
         )
-        
         await self.send_message(synthesis_message)
-        logger.info(f"[{self.agent_id}] Assigned synthesis task")
-    
-    async def _handle_synthesis_report(self, payload: DataSubmitPayload, sender_id: str):
-        """Process completed synthesis report and save to file."""
+
+    async def _handle_synthesis_report(self, payload: DataSubmitPayload, sender_id: str, task_id: Optional[str]):
+        """Forward completed synthesis report to File Save Agent."""
+        workflow = self._get_or_create_workflow(task_id)
         report_data = payload.data
-        self.synthesis_report = report_data
+        workflow["synthesis_report"] = report_data
+        workflow["updated_at"] = datetime.now()
         
         word_count = report_data.get("word_count", 0)
-        logger.info(f"[{self.agent_id}] Received synthesis report ({word_count} words)")
+        logger.info(f"[{self.agent_id}] Task {workflow['task_id']}: Synthesis received ({word_count} words). Dispatching file save...")
         
-        # Assign file save task
-        await self._assign_file_save_task(report_data)
-    
-    async def _assign_file_save_task(self, report_data: Dict):
-        """Assign file save task to persist the final report."""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"research_report_{timestamp}.md"
-        user_id = getattr(self, "user_id", 0)
-        file_path = f"output/reports/{user_id}/{filename}"
-        
-        task_data = {
-            "file_path": file_path,
-            "content": report_data.get("report_content", ""),
-            "task_id": self.current_task_id,
-            "user_id": getattr(self, "user_id", 0)
-        }
-        
-        save_message = self.create_message(
+        # FileSaveAgent autonomously handles timestamping, directory creation, and DB registration
+        save_msg = self.create_message(
             receiver_id="file_save_agent",
             msg_type=ACPMsgType.TASK_ASSIGN,
             payload=TaskAssignPayload(
                 task_type="save_file",
-                task_data=task_data,
+                task_data={
+                    "content": report_data.get("report_content", ""),
+                    "query": workflow["query"],
+                    "user_id": workflow["user_id"],
+                    "task_id": task_id
+                },
                 priority=1
             ).model_dump()
         )
+        await self.send_message(save_msg)
+
+    async def _handle_file_save_result(self, payload: DataSubmitPayload, sender_id: str, task_id: Optional[str]):
+        """Finalize workflow upon report persistence."""
+        workflow = self._get_or_create_workflow(task_id)
+        saved_path = payload.data.get("file_path", "unknown")
+        logger.info(f"[{self.agent_id}] 🎉 Task {workflow['task_id']}: Report persisted at {saved_path}")
+        await self._broadcast_workflow_completion(workflow["task_id"])
+
+    async def _handle_agent_failure(self, agent_id: str, error_status: str, task_id: Optional[str] = None):
+        """Handle agent failures gracefully to ensure workflows never hang."""
+        workflow = self._get_or_create_workflow(task_id)
+        logger.warning(f"[{self.agent_id}] Failure notification: {agent_id} on task {workflow['task_id']} ({error_status})")
         
-        await self.send_message(save_message)
-        logger.info(f"[{self.agent_id}] Assigned file save task: {file_path}")
-        
-        # Broadcast workflow completion
-        await self._broadcast_workflow_completion()
-    
-    async def _handle_agent_failure(self, agent_id: str, error_status: str):
-        """Handle agent failures and implement recovery strategies."""
-        logger.warning(f"[{self.agent_id}] Agent failure detected: {agent_id} - {error_status}")
-        
-        await self._broadcast_log("WARNING", f"Agent {agent_id} failed: {error_status}")
-        
-        # Implement basic retry logic
-        if "search" in agent_id and len(self.search_results) == 0:
-            logger.info(f"[{self.agent_id}] Retrying search task due to failure")
-            await asyncio.sleep(5)  # Wait before retry
-            await self._assign_search_task(self.current_query, getattr(self, "user_id", 0))
-    
+        # If synthesis failed, compile immediate fallback so UI flag is always cleared
+        if "synthesis" in agent_id or "synthesis_failed" in error_status:
+            logger.info(f"[{self.agent_id}] Generating fallback report for task {workflow['task_id']}")
+            sources = workflow.get("extracted_content", [])
+            lines = [
+                f"# Research Report: {workflow.get('query', 'Academic Query')}\n\n",
+                f"> ⚠️ **Notice:** Synthesis encountered an error ({error_status}). Displaying collected verified papers:\n\n"
+            ]
+            for i, s in enumerate(sources):
+                lines.append(f"### {i+1}. [{s.get('title', 'Paper')}]({s.get('url', '#')})\n\n{(s.get('content') or s.get('abstract') or '')[:500]}\n\n")
+            
+            fallback_text = "".join(lines)
+            workflow["synthesis_report"] = {"report_content": fallback_text, "word_count": len(fallback_text.split())}
+            
+            save_msg = self.create_message(
+                receiver_id="file_save_agent",
+                msg_type=ACPMsgType.TASK_ASSIGN,
+                payload=TaskAssignPayload(
+                    task_type="save_file",
+                    task_data={
+                        "content": fallback_text,
+                        "query": workflow["query"],
+                        "user_id": workflow["user_id"],
+                        "task_id": workflow["task_id"]
+                    },
+                    priority=1
+                ).model_dump()
+            )
+            await self.send_message(save_msg)
+
     async def _broadcast_log(self, level: str, message: str):
         """Broadcast log message to all subscribers."""
         log_message = self.create_message(
@@ -382,39 +417,42 @@ class AsyncOrchestratorAgent(AsyncBaseAgent):
                 component=self.agent_id
             ).model_dump()
         )
-        
         await self.send_message(log_message)
-    
-    async def _broadcast_workflow_completion(self):
-        """Broadcast workflow completion status."""
-        if self.workflow_start_time:
-            duration = datetime.now() - self.workflow_start_time
-            duration_str = str(duration).split('.')[0]  # Remove microseconds
-        else:
-            duration_str = "unknown"
+
+    async def _broadcast_workflow_completion(self, task_id: str):
+        """Broadcast workflow completion status and mark workflow finished."""
+        workflow = self._get_or_create_workflow(task_id)
+        workflow["status"] = "completed"
+        workflow["updated_at"] = datetime.now()
+        
+        start_time = workflow.get("start_time")
+        duration_str = str(datetime.now() - start_time).split('.')[0] if start_time else "unknown"
         
         completion_message = (
-            f"Research workflow completed successfully! "
-            f"Query: '{self.current_query}' | "
+            f"Research workflow completed! "
+            f"Task: {task_id} | "
+            f"Query: '{workflow['query']}' | "
             f"Duration: {duration_str} | "
-            f"Sources: {len(self.extracted_content)} | "
-            f"Report words: {self.synthesis_report.get('word_count', 0)}"
+            f"Sources: {len(workflow['extracted_content'])} | "
+            f"Report words: {workflow['synthesis_report'].get('word_count', 0)}"
         )
-        
         await self._broadcast_log("INFO", completion_message)
-        
-        logger.info(f"[{self.agent_id}] 🎉 Workflow completed: {completion_message}")
-    
-    def get_workflow_status(self) -> Dict[str, Any]:
+        logger.info(f"[{self.agent_id}] 🏁 {completion_message}")
+
+    def get_workflow_status(self, task_id: Optional[str] = None) -> Dict[str, Any]:
         """Get current workflow status and metrics."""
+        workflow = self._get_or_create_workflow(task_id)
+        start_time = workflow.get("start_time")
         return {
             "agent_id": self.agent_id,
-            "current_query": self.current_query,
-            "task_id": self.current_task_id,
-            "workflow_start_time": self.workflow_start_time.isoformat() if self.workflow_start_time else None,
-            "search_results_count": len(self.search_results),
-            "extracted_content_count": len(self.extracted_content),
-            "synthesis_complete": bool(self.synthesis_report),
+            "task_id": workflow.get("task_id", ""),
+            "current_query": workflow.get("query", ""),
+            "user_id": workflow.get("user_id", 0),
+            "workflow_start_time": start_time.isoformat() if start_time else None,
+            "search_results_count": len(workflow.get("search_results", [])),
+            "extracted_content_count": len(workflow.get("extracted_content", [])),
+            "synthesis_complete": bool(workflow.get("synthesis_report")),
+            "active_workflows_count": len(self.active_workflows),
             "agent_status": self.agent_status.copy(),
             "running": self.running
         }

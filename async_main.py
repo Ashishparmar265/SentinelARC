@@ -97,6 +97,11 @@ async def startup_event():
     # Start initialization in the background
     asyncio.create_task(initialize_system())
     
+    if os.getenv("METRICS_ENABLED", "false").lower() == "true":
+        from src.agents.async_base_agent import start_metrics_server
+        asyncio.create_task(start_metrics_server(9090))
+        logger.info("Prometheus metrics server task started on port 9090")
+
     import subprocess
     subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     await asyncio.sleep(5)  # Wait for server to be ready
@@ -116,8 +121,8 @@ async def start_research(request: ResearchRequest, background_tasks: BackgroundT
     if not state["orchestrator"]:
         raise HTTPException(status_code=503, detail="System initializing, please wait...")
     
-    logger.info(f"📥 Received Research Request: {request.query} from User {request.user_id}")
-    background_tasks.add_task(state["orchestrator"].start_research, request.query, request.user_id)
+    logger.info(f"📥 Received Research Request: {request.query} from User {request.user_id} (task_id: {request.task_id})")
+    background_tasks.add_task(state["orchestrator"].start_research, request.query, request.user_id, request.task_id)
     
     return {
         "status": "task_received",
