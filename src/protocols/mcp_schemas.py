@@ -38,6 +38,31 @@ class SaveFileParams(BaseModel):
     """
     file_path: str = Field(..., description="Path where the file should be saved")
     content: str = Field(..., description="Content to write to the file")
+    atomic: bool = Field(default=True, description="Whether to write via atomic temp-file replace")
+
+
+class ReadFileParams(BaseModel):
+    """Parameters for the read_file MCP tool."""
+    file_path: str = Field(..., description="Path of the file to read within allowed roots")
+    max_bytes: Optional[int] = Field(None, description="Optional maximum bytes to read")
+    offset: int = Field(0, description="Byte offset to start reading from")
+
+
+class ListDirectoryParams(BaseModel):
+    """Parameters for the list_directory MCP tool."""
+    directory_path: str = Field(..., description="Directory path to inspect within allowed roots")
+    pattern: Optional[str] = Field(None, description="Optional glob filter pattern (e.g. *.md)")
+    recursive: bool = Field(False, description="Whether to search recursively")
+
+
+class GetFileInfoParams(BaseModel):
+    """Parameters for the get_file_info MCP tool."""
+    file_path: str = Field(..., description="Path of the file/directory to inspect")
+
+
+class DeleteFileParams(BaseModel):
+    """Parameters for the delete_file MCP tool."""
+    file_path: str = Field(..., description="Path of the file to delete within allowed roots")
 
 
 class RephraseSentenceParams(BaseModel):
@@ -71,6 +96,54 @@ class SaveFileResponse(BaseModel):
     success: bool = Field(..., description="Whether the file was saved successfully")
     file_path: str = Field(..., description="Path where the file was saved")
     bytes_written: int = Field(..., description="Number of bytes written")
+    checksum: Optional[str] = Field(None, description="SHA-256 hash of the written content")
+    is_atomic: bool = Field(True, description="Whether atomic swap was executed")
+
+
+class ReadFileResponse(BaseModel):
+    """Response structure for read_file tool."""
+    success: bool = Field(..., description="Whether the read operation succeeded")
+    file_path: str = Field(..., description="Resolved path of the read file")
+    content: str = Field(..., description="Content read from file")
+    total_size: int = Field(..., description="Total size of file on disk in bytes")
+    bytes_read: int = Field(..., description="Number of bytes read")
+    checksum: str = Field(..., description="SHA-256 hash of the entire file")
+
+
+class FileInfoItem(BaseModel):
+    """Single file or directory entry in a directory listing."""
+    name: str = Field(..., description="File name")
+    path: str = Field(..., description="Relative or absolute path")
+    is_dir: bool = Field(..., description="Whether entry is a directory")
+    size: int = Field(..., description="Size in bytes (0 for directories)")
+    modified_at: float = Field(..., description="POSIX modification timestamp")
+
+
+class ListDirectoryResponse(BaseModel):
+    """Response structure for list_directory tool."""
+    success: bool = Field(..., description="Whether directory listing succeeded")
+    directory_path: str = Field(..., description="Directory path listed")
+    total_items: int = Field(..., description="Count of items found")
+    items: List[FileInfoItem] = Field(default_factory=list, description="List of directory entries")
+
+
+class GetFileInfoResponse(BaseModel):
+    """Response structure for get_file_info tool."""
+    success: bool = Field(..., description="Whether inspection succeeded")
+    file_path: str = Field(..., description="Path inspected")
+    exists: bool = Field(..., description="Whether path exists")
+    is_dir: bool = Field(False, description="Whether path is a directory")
+    size: int = Field(0, description="Size in bytes")
+    created_at: Optional[float] = Field(None, description="Creation timestamp")
+    modified_at: Optional[float] = Field(None, description="Modification timestamp")
+    checksum: Optional[str] = Field(None, description="SHA-256 checksum if file exists")
+
+
+class DeleteFileResponse(BaseModel):
+    """Response structure for delete_file tool."""
+    success: bool = Field(..., description="Whether operation succeeded")
+    file_path: str = Field(..., description="Path of deleted file")
+    deleted: bool = Field(..., description="True if deleted, False if did not exist")
 
 
 class RephraseSentenceResponse(BaseModel):

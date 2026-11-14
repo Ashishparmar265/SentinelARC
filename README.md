@@ -116,7 +116,10 @@ SentinelARC/
 * [System Optimizations & Interview Study Guide](docs/OPTIMIZATIONS_AND_INTERVIEW_PREP.md): Deep-dive engineering breakdown of latency reductions, multi-source ingestion, citation velocity, 4-layer verification, and system design Q&A.
 * [100 Technical Interview Questions](docs/INTERVIEW_QUESTIONS.md): 100 comprehensive technical and system design interview questions with detailed, authentic answers.
 * [System Architecture](docs/ARCHITECTURE.md): Detailed infrastructure topology, swarm pipelines, multi-layer caching, and CRIU integration.
+* [Filesystem Protocol, Storage Resilience & Dashboard UI Enhancements](docs/FILESYSTEM_STORAGE_AND_UI_ENHANCEMENTS.md): Full technical breakdown of the expanded MCP filesystem suite, atomic file swapping, SHA-256 provenance, metadata sidecars, and Streamlit dashboard overhaul.
 * [API & Protocols Reference](docs/API_REFERENCE.md): REST endpoints, Agent Communication Protocol (ACP) schemas, and SQLite database tables.
+* [Phantom Supervisor Integration](Phantom_Supervisor_Integration.md): Technical breakdown of the AMQP heartbeat proxy.
+* [System Validation Report](SYSTEM_VALIDATION_REPORT.md): Load testing and QA validation results.
 * [Phantom Supervisor Integration](Phantom_Supervisor_Integration.md): Technical breakdown of the AMQP heartbeat proxy.
 * [System Validation Report](SYSTEM_VALIDATION_REPORT.md): Load testing and QA validation results.
 

@@ -358,7 +358,8 @@ class AsyncOrchestratorAgent(AsyncBaseAgent):
                     "content": report_data.get("report_content", ""),
                     "query": workflow["query"],
                     "user_id": workflow["user_id"],
-                    "task_id": task_id
+                    "task_id": task_id,
+                    "sources": workflow.get("extracted_content", []) or workflow.get("search_results", [])
                 },
                 priority=1
             ).model_dump()
@@ -400,7 +401,8 @@ class AsyncOrchestratorAgent(AsyncBaseAgent):
                         "content": fallback_text,
                         "query": workflow["query"],
                         "user_id": workflow["user_id"],
-                        "task_id": workflow["task_id"]
+                        "task_id": workflow["task_id"],
+                        "sources": sources
                     },
                     priority=1
                 ).model_dump()

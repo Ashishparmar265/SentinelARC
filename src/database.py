@@ -1,5 +1,9 @@
 import os
-import passlib.hash
+try:
+    import passlib.hash
+    HAS_PASSLIB = True
+except ImportError:
+    HAS_PASSLIB = False
 from sqlalchemy import create_engine, Column, Integer, String, Text, ForeignKey, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy.sql import func
@@ -28,7 +32,9 @@ class User(Base):
         import hashlib, base64
         pwd_hash = hashlib.sha256(password.encode("utf-8")).digest()
         b64_pwd = base64.b64encode(pwd_hash).decode("utf-8")
-        return passlib.hash.bcrypt.verify(b64_pwd, self.password_hash)
+        if HAS_PASSLIB:
+            return passlib.hash.bcrypt.verify(b64_pwd, self.password_hash)
+        return False
 
     @staticmethod
     def hash_password(password: str) -> str:
@@ -36,7 +42,9 @@ class User(Base):
         import hashlib, base64
         pwd_hash = hashlib.sha256(password.encode("utf-8")).digest()
         b64_pwd = base64.b64encode(pwd_hash).decode("utf-8")
-        return passlib.hash.bcrypt.hash(b64_pwd)
+        if HAS_PASSLIB:
+            return passlib.hash.bcrypt.hash(b64_pwd)
+        return f"mock_{b64_pwd}"
 
 class UserSession(Base):
     __tablename__ = "user_sessions"
@@ -53,12 +61,33 @@ class Report(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     file_path = Column(String(500), nullable=False)
     query = Column(Text, nullable=False)
+    file_size = Column(Integer, nullable=True, default=0)
+    checksum = Column(String(64), nullable=True)
+    meta_file_path = Column(String(500), nullable=True)
+    format = Column(String(20), nullable=True, default="markdown")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     owner = relationship("User", back_populates="reports")
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+    # Automatic migration: ensure newly added columns exist in older SQLite DB files
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            res = conn.execute(text("PRAGMA table_info(reports)"))
+            cols = {row[1] for row in res.fetchall()}
+            if "file_size" not in cols:
+                conn.execute(text("ALTER TABLE reports ADD COLUMN file_size INTEGER DEFAULT 0"))
+            if "checksum" not in cols:
+                conn.execute(text("ALTER TABLE reports ADD COLUMN checksum VARCHAR(64)"))
+            if "meta_file_path" not in cols:
+                conn.execute(text("ALTER TABLE reports ADD COLUMN meta_file_path VARCHAR(500)"))
+            if "format" not in cols:
+                conn.execute(text("ALTER TABLE reports ADD COLUMN format VARCHAR(20) DEFAULT 'markdown'"))
+            conn.commit()
+    except Exception as e:
+        print(f"[Database] Migration check: {e}")
 
 def get_db():
     db = SessionLocal()
