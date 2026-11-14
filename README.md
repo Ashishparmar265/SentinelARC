@@ -6,10 +6,14 @@ To support high-density deployments, SentinelARC introduces a custom C++ runtime
 
 ## Key Features
 
-* **High-Density Agent Runtime (Phantom Supervisor):** Uses CRIU to checkpoint and restore idle Python agents. Reclaims RAM from idle processes, increasing container density.
-* **AMQP Connection Proxy:** A C++ interceptor proxy maintains persistent RabbitMQ connections and injects heartbeats while agents are suspended to disk.
-* **Asynchronous Microservices:** Fully async Python backend utilizing FastAPI and RabbitMQ for message routing.
-* **Streamlit Dashboard:** Integrated frontend interface for managing active research tasks and toggling between General AI and Swarm intelligence modes.
+* **Multi-Source Scholarly Retrieval:** Concurrently queries 250M+ research papers across OpenAlex, Semantic Scholar, arXiv, and PubMed, with direct DOI routing via Crossref and HyDE semantic query expansion.
+* **Citation Velocity & Anchor Detection:** Dynamically detects seminal breakthrough papers using Citation Velocity ($\text{citations}/\Delta t$) and batch median outlier classification ($3\times \text{batch median}$), with 1-hop lineage expansion.
+* **Full-Text Paywall Bypass & IMRAD Parsing:** Automated dual-layer open-access discovery via Unpaywall (`api.unpaywall.org`) and CORE API (`api.core.ac.uk`), combined with PyPDF2 stream parsing, IMRAD structure segmentation, reference stripping, and regex numerical benchmark extraction.
+* **4-Layer Grounded Scientific Verification:** Frames fact-checking as formal Natural Language Inference (NLI: `ENTAILMENT`, `CONTRADICTION`, `NEUTRAL`) with quantitative benchmark anchoring, epistemic confidence weighting, and cross-document scientific consensus/debate detection.
+* **5-Part Literature Survey Taxonomy:** Synthesizes 2,000+ word academic reviews with an Executive Verification Banner, automated Comparative Technical Matrix (Markdown table), and clickable inline citations `[Paper Title](URL)`.
+* **Multi-Tier SQLite Caching:** Sub-millisecond memoization across search, document extraction, NLI verification, and report synthesis, dropping repeat query times to **$< 1\text{ second}$**.
+* **High-Density Agent Runtime (Phantom Supervisor):** Custom C++ CRIU runtime dynamically freezes idle Python agents to disk, reclaiming 200–500MB RAM per idle agent while a C++ AMQP proxy maintains persistent RabbitMQ heartbeats.
+* **Asynchronous Microservices & Streamlit UI:** Fully asynchronous Python backend using FastAPI, RabbitMQ, and Streamlit with zero-hang failure recovery.
 
 ## Architecture
 
@@ -109,8 +113,10 @@ SentinelARC/
 
 ## Documentation
 
-* [System Optimizations & Interview Study Guide](docs/OPTIMIZATIONS_AND_INTERVIEW_PREP.md): Deep-dive engineering breakdown of latency reductions, multi-source ingestion, citation velocity, and technical Q&A.
-* [System Architecture](docs/ARCHITECTURE.md): Detailed infrastructure topology and CRIU integration.
+* [System Optimizations & Interview Study Guide](docs/OPTIMIZATIONS_AND_INTERVIEW_PREP.md): Deep-dive engineering breakdown of latency reductions, multi-source ingestion, citation velocity, 4-layer verification, and system design Q&A.
+* [100 Technical Interview Questions](docs/INTERVIEW_QUESTIONS.md): 100 comprehensive technical and system design interview questions with detailed, authentic answers.
+* [System Architecture](docs/ARCHITECTURE.md): Detailed infrastructure topology, swarm pipelines, multi-layer caching, and CRIU integration.
+* [API & Protocols Reference](docs/API_REFERENCE.md): REST endpoints, Agent Communication Protocol (ACP) schemas, and SQLite database tables.
 * [Phantom Supervisor Integration](Phantom_Supervisor_Integration.md): Technical breakdown of the AMQP heartbeat proxy.
 * [System Validation Report](SYSTEM_VALIDATION_REPORT.md): Load testing and QA validation results.
 

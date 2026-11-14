@@ -209,9 +209,33 @@ class AsyncBaseAgent(ABC):
         try:
             async with self.session.post(url, json=params) as response:
                 if response.status == 200:
-                    result = await response.json()
-                    logger.debug(f"[{self.agent_id}] MCP call successful: {server_name}.{tool_name}")
-                    return result
+                    content_type = response.headers.get("Content-Type", "")
+                    if "text/event-stream" in content_type:
+                        # Parse SSE event stream to aggregate result
+                        last_result = None
+                        async for line in response.content:
+                            if line:
+                                line_text = line.decode('utf-8', errors='ignore').strip()
+                                if line_text.startswith('data: '):
+                                    data_text = line_text[6:].strip()
+                                    try:
+                                        import json
+                                        data = json.loads(data_text)
+                                    except Exception:
+                                        try:
+                                            data = eval(data_text)
+                                        except Exception:
+                                            data = {"content": data_text}
+                                    if isinstance(data, dict):
+                                        last_result = data
+                        if last_result is not None:
+                            logger.debug(f"[{self.agent_id}] MCP SSE call successful: {server_name}.{tool_name}")
+                            return last_result
+                        return {"success": True, "content": ""}
+                    else:
+                        result = await response.json(content_type=None)
+                        logger.debug(f"[{self.agent_id}] MCP call successful: {server_name}.{tool_name}")
+                        return result
                 else:
                     error_text = await response.text()
                     raise Exception(f"MCP call failed: {response.status} - {error_text}")

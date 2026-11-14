@@ -323,6 +323,7 @@ class AsyncOrchestratorAgent(AsyncBaseAgent):
             "query": workflow["query"],
             "search_results": workflow["search_results"],
             "extracted_content": workflow["extracted_content"],
+            "fact_check_results": workflow.get("fact_check_results", {}),
             "task_id": task_id
         }
         
