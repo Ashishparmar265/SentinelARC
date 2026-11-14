@@ -92,6 +92,13 @@ flowchart TD
   * If a user supplies a DOI, the agent bypasses fuzzy keyword search and directly fetches the authoritative metadata from Crossref.
   * For general queries, it queries all 4 sources concurrently via `asyncio.gather(*tasks, return_exceptions=True)`, deduplicates papers by normalized title, calculates citation velocity, and uses Groq LLM for cross-encoder reranking down to the top 10–12 high-precision papers.
 
+### 2.1 Advanced Search Agent Enhancements (HyDE, Citation Tree, Cache & Guards)
+* **HyDE (Hypothetical Document Embeddings) Query Generation:** Employs Groq LLM to draft a 2-sentence hypothetical academic abstract predicting methodology and benchmarks for the research question. High-signal domain keywords from this hypothetical paper are merged into the query, significantly increasing retrieval recall on niche scientific topics.
+* **SQLite-Backed Instant Cache Memoization:** Stores query hashes (`SHA-256`) and results in `search_cache` in `sentinelarc.db`. Identical or repeated queries return in **$< 1\text{ms}$** (0ms network time), eliminating redundant API calls and rate-limiting risk.
+* **Automated 1-Hop Citation Graph Expansion:** When an Anchor paper is identified, the agent automatically queries OpenAlex for works citing that paper (`filter=cites:{openalex_id}&sort=cited_by_count:desc&per_page=2`), injecting top lineage descendants with a `[🔗 LINEAGE DESCENDANT]` badge.
+* **Recency / Year-Window Filtering:** Parses explicit user time expressions (e.g., `"since 2023"`, `"from 2024"`) and passes `publication_year:>{min_year - 1}` constraints down to OpenAlex, Semantic Scholar, and arXiv.
+* **Strict Timeout Guards & Hedging:** Wraps each external API in an `asyncio.wait_for(..., timeout=4.5)` guard. If Semantic Scholar or PubMed suffers upstream latency, it is gracefully dropped after 4.5s without delaying OpenAlex or arXiv.
+
 ### 3. High-Throughput Batch Extraction & CORE Paywall Bypass
 * **File:** `src/agents/async_extraction_agent.py`
 * **The Problem:** Academic papers are frequently gated behind publisher paywalls (Elsevier/ScienceDirect, Springer, Nature, IEEE Xplore). Standard browser scraping gets blocked by Cloudflare or captures empty login pages.
@@ -222,3 +229,4 @@ We implemented **three defense-in-depth mechanisms**:
 1. **Multi-Model LLM Failover:** In `AsyncSynthesisAgent`, if the primary Groq model (`qwen/qwen3.8-27b`) fails, it falls back to `openai/gpt-oss-20b`.
 2. **Guaranteed Fallback Report Synthesis:** If all LLMs fail, the agent automatically compiles a structured markdown summary of the collected source abstracts and submits it as the final report.
 3. **Orchestrator Failure Trap:** If any worker agent emits a failure status update, `_handle_agent_failure` catches it, synthesizes a fallback report, and triggers `file_save_agent`, guaranteeing that a file is saved, the DB row is inserted, and the UI flag is removed.
+
