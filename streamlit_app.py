@@ -697,26 +697,6 @@ def main():
     if new_report_found:
         st.rerun()
 
-    # ── QUICK PROMPTS CHIPS ─────────────────────────────────────────────
-    st.caption("✨ Quick Start Prompts:")
-    chip_cols = st.columns(4)
-    with chip_cols[0]:
-        if st.button("⚡ Quantum Key Distribution", key="qp_1", use_container_width=True):
-            st.session_state["pending_query"] = "Quantum Key Distribution Protocols and Post-Quantum Security"
-            st.rerun()
-    with chip_cols[1]:
-        if st.button("🧬 CRISPR Off-Target Repair", key="qp_2", use_container_width=True):
-            st.session_state["pending_query"] = "CRISPR-Cas9 Off-Target Effects and Fidelity Enhancement"
-            st.rerun()
-    with chip_cols[2]:
-        if st.button("🤖 Agent Memory with CRIU", key="qp_3", use_container_width=True):
-            st.session_state["pending_query"] = "Process Checkpointing in Multi-Agent Systems using CRIU"
-            st.rerun()
-    with chip_cols[3]:
-        if st.button("🧠 HyDE Dense Retrieval", key="qp_4", use_container_width=True):
-            st.session_state["pending_query"] = "Hypothetical Document Embeddings for Zero-Shot Academic Search"
-            st.rerun()
-
     # ── TOP SEARCH INPUT ───────────────────────────────────────────────
     initial_text = st.session_state.pop("pending_query", "")
     search_prompt = st.text_input(
