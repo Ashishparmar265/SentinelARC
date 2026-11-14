@@ -1,187 +1,170 @@
-# Production Deployment Guide
+# SentinelARC Production Deployment Guide
 
-> **Architecture Update Note**: This documentation has been modernized for the SentinelARC platform. Where applicable, assume that agents now run under the Phantom Supervisor (CRIU) runtime and communicate through the C++ AMQP Interceptor.
+> **Enterprise Operations Guide**: This document details how to deploy, configure, scale, and monitor SentinelARC in production environments using Docker Compose and Kubernetes.
 
+---
 
+## 1. System Requirements
 
-## 🚀 SentinelARC Production Deployment
+### Hardware Sizing
+| Environment | CPU Cores | RAM | Disk Storage | Target Concurrent Workflows |
+|---|---|---|---|---|
+| **Development** | 4 cores | 8 GB | 20 GB SSD | 1–5 workflows |
+| **Production (Standard)** | 8 cores | 16 GB | 50 GB NVMe | 10–25 workflows |
+| **Production (High-Scale)** | 16+ cores | 32 GB | 100+ GB NVMe | 50+ concurrent workflows |
 
-This guide covers deploying SentinelARC in a production environment using Kubernetes with comprehensive monitoring.
+### Software Prerequisites
+- **Docker Engine**: 24.0+
+- **Docker Compose**: 2.20+
+- **Kubernetes**: 1.26+ (Optional, for enterprise pod orchestration)
+- **NVIDIA Container Toolkit**: Optional (only required if running local GPU-accelerated Ollama instances)
 
-### Prerequisites
+---
 
-#### Required Software
-- Docker Engine 20.10+
-- Kubernetes cluster (1.24+)
-- kubectl configured
-- Git
+## 2. Deployment Topology & Port Bindings
 
-#### Hardware Requirements
-- **Minimum**: 4 CPU cores, 8GB RAM, 20GB storage
-- **Recommended**: 8 CPU cores, 16GB RAM, 50GB storage
+```
+                              Internet / User Traffic
+                                         │
+                    ┌────────────────────┴────────────────────┐
+                    │                                         │
+                    ▼                                         ▼
+         ┌─────────────────────┐                   ┌─────────────────────┐
+         │  Streamlit Web UI   │                   │  FastAPI Backend    │
+         │  Port 8501 (HTTP)   │                   │  Port 8000 (HTTP)   │
+         └──────────┬──────────┘                   └──────────┬──────────┘
+                    │                                         │
+                    └────────────────────┬────────────────────┘
+                                         │
+                                         ▼
+                              ┌─────────────────────┐
+                              │ RabbitMQ Message    │
+                              │ Broker (AMQP 5672)  │
+                              │ Management (15672)  │
+                              └──────────┬──────────┘
+                                         │
+             ┌───────────────────────────┼───────────────────────────┐
+             │                           │                           │
+             ▼                           ▼                           ▼
+┌─────────────────────────┐ ┌─────────────────────────┐ ┌─────────────────────────┐
+│ Primary Tooling MCP     │ │ Filesystem MCP Server   │ │ Prometheus & Grafana    │
+│ Port 8001 (FastAPI/SSE) │ │ Port 8002 (FastAPI)     │ │ Ports 9090 & 3000       │
+└─────────────────────────┘ └─────────────────────────┘ └─────────────────────────┘
+```
 
-### Deployment Options
+### Complete Port Map
 
-## Option 1: Docker Compose (Development/Testing)
+| Service Name | Container Name | Port(s) | Protocol | Purpose |
+|---|---|---|---|---|
+| **Streamlit UI** | `synapse-streamlit` | `8501` | HTTP | Multi-user research dashboard & chat |
+| **FastAPI Core Engine** | `synapse-agents` | `8000` | HTTP | Research API & Agent Swarm runtime |
+| **Primary Tooling MCP** | `synapse-primary-tooling` | `8001` | HTTP / SSE | Web search & streaming text extraction |
+| **Filesystem MCP** | `synapse-filesystem` | `8002` | HTTP | Sandboxed atomic file persistence |
+| **RabbitMQ AMQP** | `synapse-rabbitmq` | `5672` | AMQP 0-9-1 | Inter-agent message bus |
+| **RabbitMQ Management** | `synapse-rabbitmq` | `15672` | HTTP | Broker dashboard (`synapse/synapse123`) |
+| **Prometheus** | `synapse-prometheus` | `9090` | HTTP | Metrics collection and scraping |
+| **Grafana** | `synapse-grafana` | `3000` | HTTP | Visualization dashboard (`admin/synapse123`) |
 
+---
+
+## 3. Deployment Option 1: Docker Compose (Recommended)
+
+Docker Compose provides a fully orchestrated multi-service environment with automated health checks, dependency resolution, and volume mounts.
+
+### Step 1: Clone and Configure Environment
 ```bash
-# Clone repository
 git clone https://github.com/Ashishparmar265/SentinelARC.git
 cd SentinelARC
 
-# Deploy with monitoring stack
-docker-compose -f docker-compose.optimized.yml up --build
-
-# Access services
-# - Grafana: http://localhost:3000 (admin/synapse123)
-# - Prometheus: http://localhost:9090
-# - RabbitMQ: http://localhost:15672 (synapse/synapse123)
+# Copy and configure environment variables
+cp .env.example .env  # Or edit .env directly
 ```
 
-## Option 2: Kubernetes (Production)
-
+Ensure `.env` contains:
 ```bash
-# Deploy to cluster
-./k8s/deploy.sh
-
-# Verify deployment
-kubectl get pods -n SentinelARC
-
-# Access monitoring
-kubectl port-forward svc/grafana 3000:3000
-kubectl port-forward svc/prometheus 9090:9090
+GROQ_API_KEY=gsk_your_groq_api_key_here
+GROQ_MODEL=qwen/qwen3.8-27b
+RABBITMQ_URL=amqp://synapse:synapse123@rabbitmq:5672/
+ALLOWED_ROOTS=/app/output,/app/temp,output,temp
+METRICS_ENABLED=true
 ```
 
-### Monitoring & Observability
-
-#### Metrics Available
-- **HTTP Request Latency**: P50, P95, P99 percentiles
-- **Request Rate**: Requests per second by service
-- **Agent Task Processing**: Tasks processed by agent type
-- **RabbitMQ Queue Depth**: Message queue monitoring
-- **Resource Utilization**: CPU, memory, network usage
-
-#### Grafana Dashboards
-Pre-configured dashboards include:
-- API Performance Overview
-- Agent Activity Monitoring  
-- Infrastructure Resource Usage
-- RabbitMQ Message Flow
-
-#### Alerting (Optional)
-Configure alerts for:
-- High request latency (>5s)
-- Queue depth exceeding threshold
-- Agent failure detection
-- Resource exhaustion warnings
-
-### Security Considerations
-
-#### Network Security
-- All inter-service communication within cluster network
-- No external ports exposed except monitoring interfaces
-- TLS termination at ingress (configure separately)
-
-#### Application Security
-- MCP Roots filesystem access controls
-- Environment-based secret management
-- Non-root container execution
-- Resource limits enforced
-
-### Scaling Guidelines
-
-#### Horizontal Scaling
-- **Primary Server**: Scale based on API load (2-4 replicas recommended)
-- **Filesystem Server**: Single replica (shared storage considerations)
-- **Agents**: Scale based on workload volume (1-2 replicas typical)
-- **RabbitMQ**: Single node for simplicity (cluster for HA)
-
-#### Resource Tuning
-```yaml
-# Example resource adjustments
-resources:
-  requests:
-    memory: "256Mi"
-    cpu: "250m"
-  limits:
-    memory: "512Mi" 
-    cpu: "500m"
-```
-
-### Troubleshooting
-
-#### Common Issues
-1. **Pods not starting**: Check resource availability and image pull status
-2. **Service connectivity**: Verify ConfigMap settings and network policies
-3. **Performance issues**: Review metrics and adjust resource limits
-4. **Storage problems**: Ensure PersistentVolumes are properly configured
-
-#### Debugging Commands
+### Step 2: Launch the Stack
 ```bash
-# Check pod logs
-kubectl logs -l app=SentinelARC -n SentinelARC
-
-# Debug networking
-kubectl exec -it <pod-name> -n SentinelARC -- nslookup rabbitmq-service
-
-# Resource usage
-kubectl top pods -n SentinelARC
+docker-compose -f docker-compose.optimized.yml up --build -d
 ```
 
-### Backup & Recovery
-
-#### Data Persistence
-- **RabbitMQ**: Configure persistent volumes for message durability
-- **Output Files**: Mount shared storage for agent-generated reports
-- **Metrics**: Prometheus data retention configuration
-
-#### Backup Strategy
+### Step 3: Verify Container Health
 ```bash
-# Backup Kubernetes manifests
-kubectl get all -n SentinelARC -o yaml > synapse-backup.yaml
-
-# Export monitoring configuration
-kubectl get configmap prometheus-config -o yaml > prometheus-backup.yaml
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 ```
+All containers should report `healthy`.
 
-### Maintenance
+---
 
-#### Updates
-1. Update container images in deployment manifests
-2. Apply rolling updates: `kubectl rollout restart deployment/<name> -n SentinelARC`
-3. Monitor rollout: `kubectl rollout status deployment/<name> -n SentinelARC`
+## 4. Deployment Option 2: Kubernetes (Enterprise Cluster)
 
-#### Health Monitoring
-- Monitor Grafana dashboards for anomalies
-- Set up automated health checks
-- Configure log aggregation (ELK stack recommended)
+For high-availability production clusters, SentinelARC provides Kubernetes manifests under [`k8s/`](file:///home/iiitl/SentinelARC/k8s).
 
-### Performance Optimization
-
-#### Production Tuning
-- Enable connection pooling (already configured)
-- Adjust worker processes based on load
-- Configure appropriate resource limits
-- Enable metrics collection for optimization insights
-
-#### Load Testing
+### Deployment Steps
 ```bash
-# Run performance tests
-python scripts/performance_test.py
+# Apply namespace, ConfigMaps, and Secrets
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/configmap.yaml
+kubectl apply -f k8s/secrets.yaml
 
-# Monitor during load
-python scripts/monitor_system.py
+# Deploy RabbitMQ cluster
+kubectl apply -f k8s/rabbitmq-deployment.yaml
+
+# Deploy MCP Servers
+kubectl apply -f k8s/primary-tooling-deployment.yaml
+kubectl apply -f k8s/filesystem-deployment.yaml
+
+# Deploy Core Agents Swarm and Streamlit
+kubectl apply -f k8s/agents-deployment.yaml
+kubectl apply -f k8s/streamlit-deployment.yaml
+
+# Deploy Prometheus and Grafana monitoring
+kubectl apply -f k8s/monitoring/
 ```
 
-This production deployment provides enterprise-grade reliability, monitoring, and scalability for SentinelARC.
-
-
-## �� V2 Deployment & Scaling Updates
-*Added as of Latest Project Iteration*
-### Volume Mapping and Live-Reload
-The `docker-compose.optimized.yml` has been updated to explicitly map host volumes directly into the `synapse-agents` environments.
-```yml
-    volumes:
-      - ./src:/app/src
+### Pod Verification
+```bash
+kubectl get pods -n sentinelarc -o wide
 ```
-This entirely bypasses the need for `docker build` restarts during iterative local development. When Python throws unhandled exceptions (like `NameError`), developers simply edit the host file and run `docker compose restart`, preserving database/network persistency while injecting hot-fixed code.
+
+---
+
+## 5. Persistence, Backups & Disaster Recovery
+
+### Persistent Volumes
+- **Database & Reports Storage**: Mounted at `/app/output` (mapped to `./output` on host).
+  - SQLite database file: `output/sentinelarc.db`
+  - User reports directory: `output/reports/{user_id}/`
+- **RabbitMQ State**: Persisted via Docker named volume `rabbitmq_data`.
+
+### Database Backup Strategy
+Because SQLite operates with Write-Ahead Logging (`PRAGMA journal_mode=WAL;`), use the safe online backup API or `sqlite3 .backup`:
+```bash
+# Safe hot backup of SQLite database
+sqlite3 output/sentinelarc.db ".backup output/backups/sentinelarc_$(date +%Y%m%d_%H%M%S).db"
+
+# Archive generated markdown reports
+tar -czvf output/backups/reports_$(date +%Y%m%d).tar.gz output/reports/
+```
+
+---
+
+## 6. Observability & Performance Tuning
+
+### Prometheus Scrape Endpoints
+- Core FastAPI & Agents: `http://synapse-agents:8000/metrics`
+- Primary Tooling MCP: `http://synapse-primary-tooling:8001/metrics`
+- Filesystem MCP: `http://synapse-filesystem:8002/metrics`
+- RabbitMQ Metrics: `http://synapse-rabbitmq:15672/metrics`
+
+### Production Latency Optimization Checklist
+1. **Groq Cloud Inference**: Set `GROQ_API_KEY` to utilize Groq LPU inference (~250 tokens/sec), reducing survey synthesis from 4 minutes to under 8 seconds.
+2. **SQLite WAL Mode**: Enabled by default (`PRAGMA journal_mode=WAL;`), enabling simultaneous non-blocking reads during writes.
+3. **Multi-Tier SQLite Caches**: Pre-warmed cache handles repeated queries in $< 1\text{ms}$.
+4. **Async Semaphore Bounds**: `asyncio.Semaphore(5)` on Extraction Agent prevents socket starvation and CDN blocking.

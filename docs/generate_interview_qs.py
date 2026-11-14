@@ -82,7 +82,9 @@ def generate_markdown():
         md += f"**Q{q_num}: (Follow-up) How does this interact with the user interface?**\n*A: The UI mostly polls or uses Server-Sent Events (SSE) to get updates based on the `task_id` while this complex backend process runs asynchronously.*\n\n"
         q_num += 1
 
-    with open("/home/iiitl/SentinelARC/docs/INTERVIEW_QUESTIONS.md", "w") as f:
+    # Note: Output directed to a sample file so the comprehensive hand-curated
+    # INTERVIEW_QUESTIONS.md (with 100 verified technical questions) is never overwritten.
+    with open("/home/iiitl/SentinelARC/docs/interview_qs_sample.md", "w") as f:
         f.write(md)
 
 generate_markdown()

@@ -11,14 +11,14 @@ This document provides a comprehensive technical breakdown of the architectural 
 | **Filesystem MCP Server** | Only supported `save_file` and `validate_path`. Non-atomic direct stream write. | Full MCP file lifecycle (`save_file`, `read_file`, `list_directory`, `get_file_info`, `delete_file`). Atomic temp-file swap + SHA-256. | Eliminates partial-read race conditions during Streamlit polling and CRIU checkpoint/restore; achieves full MCP protocol specification. |
 | **File Save Agent** | Saved only raw Markdown; dropped all structured research metadata; non-atomic direct fallback. | Dual-tier atomic write (MCP + direct fallback), companion `.meta.json` sidecar, standalone styled `.html` generation, extended DB persistence. | Academic research produces rich citation graphs and provenance that must not be discarded; guarantees zero file loss and full reproducibility. |
 | **Database Schema** | Minimal schema (`id, user_id, file_path, query, created_at`). | Extended schema with `file_size`, `checksum`, `meta_file_path`, `format`, plus automated non-destructive SQLite migration. | Enables cryptographic verification of reports and tracks multi-format assets across user sessions without breaking older database files. |
-| **Streamlit Dashboard** | Plain text input, indefinite generic spinner, basic markdown dump, brittle CSS `:has()` hacks. | Responsive glassmorphic layout, Quick-Start prompt chips, 5-stage live Swarm Stepper, 4-tab report viewer (Report, Sources, Integrity, HTML), and 4-in-1 export toolbar. | Radically elevates research UX, provides real-time swarm transparency, and enables one-click PDF, HTML, and JSON exports. |
+| **Streamlit Dashboard** | Plain text input, indefinite generic spinner, basic markdown dump, brittle CSS `:has()` hacks. | Responsive glassmorphic layout, clean focused research input, 5-stage live Swarm Stepper, 4-tab report viewer (Report, Sources, Integrity, HTML), and 4-in-1 export toolbar. | Radically elevates research UX, provides real-time swarm transparency, and enables one-click PDF, HTML, and JSON exports. |
 | **System Resilience** | Hard failure if optional dependencies (`prometheus_client`, `pika`, `sse_starlette`) were absent in local host python. | Resilient conditional imports with dummy fallbacks across `async_base_agent.py`, `fastapi_primary_server.py`, `rabbitmq_bus.py`, and `agents/__init__.py`. | Enables effortless offline development, unit testing, and container portability. |
 
 ---
 
 ## 2. Technical Breakdown
 
-### 2.1 Complete Filesystem MCP Suite ([fastapi_filesystem_server.py](file:///c:/Users/ashis/OneDrive/Desktop/Projects/SentinelARC-main/SentinelARC-main/src/mcp_servers/fastapi_filesystem_server.py))
+### 2.1 Complete Filesystem MCP Suite ([fastapi_filesystem_server.py](file:///home/iiitl/SentinelARC/src/mcp_servers/fastapi_filesystem_server.py))
 
 #### The Problem:
 1. Streamlit polls the `output/reports/` directory while the background swarm writes reports. Streaming bytes directly into the target file caused **partial read corruptions** where the UI rendered half-written text.
@@ -46,7 +46,7 @@ This document provides a comprehensive technical breakdown of the architectural 
 
 ---
 
-### 2.2 Autonomous File Save Agent ([async_file_save_agent.py](file:///c:/Users/ashis/OneDrive/Desktop/Projects/SentinelARC-main/SentinelARC-main/src/agents/async_file_save_agent.py))
+### 2.2 Autonomous File Save Agent ([async_file_save_agent.py](file:///home/iiitl/SentinelARC/src/agents/async_file_save_agent.py))
 
 #### The Solution:
 1. **Companion Metadata Sidecar (`.meta.json`)**:
@@ -72,7 +72,7 @@ This document provides a comprehensive technical breakdown of the architectural 
 
 ---
 
-### 2.3 Database Schema & Non-Destructive Auto-Migration ([database.py](file:///c:/Users/ashis/OneDrive/Desktop/Projects/SentinelARC-main/SentinelARC-main/src/database.py))
+### 2.3 Database Schema & Non-Destructive Auto-Migration ([database.py](file:///home/iiitl/SentinelARC/src/database.py))
 
 #### The Solution:
 * The `Report` model was extended:
@@ -86,7 +86,7 @@ This document provides a comprehensive technical breakdown of the architectural 
 
 ---
 
-### 2.4 Streamlit Dashboard UI Overhaul ([streamlit_app.py](file:///c:/Users/ashis/OneDrive/Desktop/Projects/SentinelARC-main/SentinelARC-main/streamlit_app.py))
+### 2.4 Streamlit Dashboard UI Overhaul ([streamlit_app.py](file:///home/iiitl/SentinelARC/streamlit_app.py))
 
 #### The Solution:
 1. **Glassmorphic Header & Quick-Start Hub**:
@@ -114,7 +114,7 @@ This document provides a comprehensive technical breakdown of the architectural 
 
 ## 3. Automated Verification
 
-An automated regression test suite was created in [tests/test_filesystem_and_file_save.py](file:///c:/Users/ashis/OneDrive/Desktop/Projects/SentinelARC-main/SentinelARC-main/tests/test_filesystem_and_file_save.py):
+An automated regression test suite was created in [tests/test_filesystem_and_file_save.py](file:///home/iiitl/SentinelARC/tests/test_filesystem_and_file_save.py):
 
 ```powershell
 python .\SentinelARC-main\tests\test_filesystem_and_file_save.py

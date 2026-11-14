@@ -1,307 +1,226 @@
 # Agent Communication Protocol (ACP) Specification
 
-> **Architecture Update Note**: This documentation has been modernized for the SentinelARC platform. Where applicable, assume that agents now run under the Phantom Supervisor (CRIU) runtime and communicate through the C++ AMQP Interceptor.
+> **Specification Version**: 2.1 (Production)  
+> **Reference Implementation**: `src/protocols/acp_schema.py` and `src/message_bus/rabbitmq_bus.py`
 
+---
 
+## 1. Overview
 
-## Overview
+The **Agent Communication Protocol (ACP)** is SentinelARC's standardized, type-safe messaging specification. ACP governs all asynchronous inter-agent coordination over AMQP (RabbitMQ), supporting both direct Agent-to-Agent (A2A) tasks and Publish-Subscribe topic broadcasts.
 
-The Agent Communication Protocol (ACP) is a structured messaging system designed for SentinelARC that enables robust, type-safe communication between intelligent agents. ACP provides the foundation for both direct agent-to-agent (A2A) interactions and publish-subscribe broadcast patterns.
+### Core Architectural Principles
+1. **Type Safety & Pydantic Validation**: Every message envelope and payload is strictly validated using Pydantic models before serialization to JSON bytes.
+2. **Stateless Task Isolation**: All operational payloads carry a mandatory `task_id` UUID to prevent cross-talk between overlapping research workflows.
+3. **Decoupled Asynchrony**: Agents communicate non-blockingly over AMQP exchanges, allowing workers to scale horizontally and survive independent restarts.
+4. **Observable Event Streams**: Built-in `LOG_BROADCAST` and `STATUS_UPDATE` primitives stream real-time progress to system loggers and UI pollers.
 
-## Core Principles
+---
 
-1. **Type Safety**: All messages use Pydantic models for validation and serialization
-2. **Flexibility**: Support for both direct messaging and topic-based broadcasts  
-3. **Observability**: Built-in logging and status tracking capabilities
-4. **Extensibility**: Pluggable payload system for different message types
+## 2. Base Message Envelope
 
-## Message Structure
-
-### Base Message Format
-
-All ACP messages follow a standardized structure defined by the `ACPMessage` model:
+All inter-agent messages are packaged inside the standardized `ACPMessage` envelope:
 
 ```python
 class ACPMessage(BaseModel):
-    sender_id: str              # Unique identifier of the sending agent
-    receiver_id: Optional[str]  # Target agent ID (for direct messages)
-    topic: Optional[str]        # Topic name (for broadcast messages)
-    msg_type: ACPMsgType        # Type of message being sent
-    payload: Dict[str, Any]     # Message-specific data
-    timestamp: Optional[str]    # Message timestamp
+    sender_id: str              # Unique identifier of sending agent (e.g. "orchestrator")
+    receiver_id: Optional[str]  # Target agent identifier (for direct routing)
+    topic: Optional[str]        # Broadcast topic name (e.g. "logs", "metrics")
+    msg_type: ACPMsgType        # Enumerated protocol action
+    payload: Dict[str, Any]     # Type-safe payload serialized as dict
+    timestamp: Optional[str]    # ISO-8601 UTC timestamp string
 ```
 
-### Message Types
+### Protocol Message Types (`ACPMsgType`)
 
-ACP defines six core message types in the `ACPMsgType` enumeration:
+| Enum Value | Purpose | Typical Direction | Payload Model |
+|---|---|---|---|
+| `TASK_ASSIGN` | Delegates an operational task to a worker | Orchestrator → Worker | `TaskAssignPayload` |
+| `STATUS_UPDATE` | Reports progress % and state transitions | Worker → Orchestrator | `StatusUpdatePayload` |
+| `DATA_SUBMIT` | Returns completed research data artifacts | Worker → Orchestrator | `DataSubmitPayload` |
+| `VALIDATION_REQUEST` | Requests peer review / fact checking | Synthesis / Agent → FactChecker | `ValidationRequestPayload` |
+| `VALIDATION_RESPONSE` | Returns validation verdict & evidence | FactChecker → Requester | `ValidationResponsePayload` |
+| `LOG_BROADCAST` | System-wide event broadcasting | Any Agent → Topic Exchange | `LogBroadcastPayload` |
 
-| Message Type | Purpose | Direction | Payload Type |
-|-------------|---------|-----------|--------------|
-| `TASK_ASSIGN` | Assign work to an agent | Orchestrator → Worker | `TaskAssignPayload` |
-| `STATUS_UPDATE` | Report progress/status | Worker → Orchestrator | `StatusUpdatePayload` |
-| `DATA_SUBMIT` | Submit processed results | Worker → Orchestrator | `DataSubmitPayload` |
-| `VALIDATION_REQUEST` | Request fact checking | Agent → FactChecker | `ValidationRequestPayload` |
-| `VALIDATION_RESPONSE` | Respond to validation | FactChecker → Agent | `ValidationResponsePayload` |
-| `LOG_BROADCAST` | System-wide logging | Any Agent → Topic | `LogBroadcastPayload` |
+---
 
-## Communication Patterns
+## 3. Communication Patterns
 
-### 1. Direct Agent-to-Agent (A2A) Communication
-
-Direct A2A communication uses the `receiver_id` field to route messages to specific agents:
+### Pattern 1: Direct Agent-to-Agent (A2A) Routing
+Direct messages specify `receiver_id`. The underlying message bus routes the message to the `synapse.direct` AMQP exchange with a routing key equal to `receiver_id`:
 
 ```python
-# Orchestrator assigning task to SearchAgent
+# Orchestrator assigning search task
 task_message = ACPMessage(
     sender_id="orchestrator",
     receiver_id="search_agent",
     msg_type=ACPMsgType.TASK_ASSIGN,
     payload=TaskAssignPayload(
         task_type="web_search",
-        task_data={"query": "quantum computing cryptography"},
+        task_data={"query": "Direct Preference Optimization in LLMs", "task_id": "task_9e1b2c3d"},
         priority=1
     ).model_dump()
 )
 ```
 
-### 2. Publish-Subscribe Broadcasting
-
-Broadcast communication uses the `topic` field to send messages to all subscribed agents:
+### Pattern 2: Publish-Subscribe Topic Broadcasting
+Broadcast messages omit `receiver_id` and set `topic`. The message bus routes them to the `synapse.topics` AMQP exchange:
 
 ```python
-# Logger broadcasting system event
+# Extraction Agent broadcasting progress log
 log_message = ACPMessage(
     sender_id="extraction_agent",
     topic="logs",
     msg_type=ACPMsgType.LOG_BROADCAST,
     payload=LogBroadcastPayload(
         level="INFO",
-        message="Content extraction completed successfully",
+        message="Batch extraction complete for 5 open-access PDFs",
         component="extraction_agent"
     ).model_dump()
 )
 ```
 
-### 3. Request-Response Patterns
-
-Some interactions follow request-response patterns, such as fact-checking:
+### Pattern 3: Request-Response Data Submission
+Workers return completed payloads to the Orchestrator via `DATA_SUBMIT`:
 
 ```python
-# Request validation
-validation_request = ACPMessage(
-    sender_id="synthesis_agent",
-    receiver_id="fact_checker_agent", 
-    msg_type=ACPMsgType.VALIDATION_REQUEST,
-    payload=ValidationRequestPayload(
-        claim="Quantum computers can break RSA encryption",
-        source_url="https://example.com/quantum-crypto",
-        validation_type="fact_check"
-    ).model_dump()
-)
-
-# Response with validation result
-validation_response = ACPMessage(
+# Fact Checker returning 4-layer validation results
+submission = ACPMessage(
     sender_id="fact_checker_agent",
-    receiver_id="synthesis_agent",
-    msg_type=ACPMsgType.VALIDATION_RESPONSE, 
-    payload=ValidationResponsePayload(
-        is_valid=True,
-        confidence=0.85,
-        evidence="Cross-referenced with multiple academic sources",
-        source="fact_checker_agent"
+    receiver_id="orchestrator",
+    msg_type=ACPMsgType.DATA_SUBMIT,
+    payload=DataSubmitPayload(
+        data_type="fact_check_results",
+        data={
+            "overall_confidence": 0.92,
+            "consensus_status": "SCIENTIFIC CONSENSUS",
+            "verified_claims_count": 8,
+            "contested_claims_count": 0,
+            "verifications": [...]
+        },
+        task_id="task_9e1b2c3d"
     ).model_dump()
 )
 ```
 
-## Payload Specifications
+---
 
-### TaskAssignPayload
+## 4. Detailed Payload Specifications
 
-Used for `TASK_ASSIGN` messages to delegate work to agents:
-
+### 4.1 TaskAssignPayload
 ```python
 class TaskAssignPayload(BaseModel):
-    task_type: str                    # Type of task ("web_search", "extract_content", etc.)
-    task_data: Dict[str, Any]         # Task-specific parameters
-    priority: int = 1                 # Task priority (1=high, 5=low)
+    task_type: str                    # Task verb: "web_search", "batch_extract", "fact_check", "synthesize", "save_report"
+    task_data: Dict[str, Any]         # Task-specific arguments (query, papers, claims, task_id)
+    priority: int = 1                 # Priority tier (1=High, 5=Low)
 ```
 
-### StatusUpdatePayload
-
-Used for `STATUS_UPDATE` messages to report progress:
-
+### 4.2 StatusUpdatePayload
 ```python
 class StatusUpdatePayload(BaseModel):
-    status: str                       # Current status description
-    progress: Optional[float] = None  # Progress percentage (0-100)
-    task_id: Optional[str] = None     # Associated task identifier
+    status: str                       # Current state description (e.g. "parsing_pdf_stream")
+    progress: Optional[float] = None  # Progress indicator float (0.0 to 100.0)
+    task_id: Optional[str] = None     # Associated workflow UUID
 ```
 
-### DataSubmitPayload
-
-Used for `DATA_SUBMIT` messages to return processed results:
-
+### 4.3 DataSubmitPayload
 ```python
 class DataSubmitPayload(BaseModel):
-    data_type: str                    # Type of data ("search_results", "extracted_content", etc.)
-    data: Any                         # The actual data payload
-    source: Optional[str] = None      # Source of the data
-    task_id: Optional[str] = None     # Associated task identifier
+    data_type: str                    # Artifact identifier: "search_results", "extracted_content", "fact_check_results", "synthesis_report", "save_complete"
+    data: Any                         # Structured result payload (dict, list, or string)
+    source: Optional[str] = None      # Source agent identifier
+    task_id: Optional[str] = None     # Mandatory correlation UUID
 ```
 
-### LogBroadcastPayload
-
-Used for `LOG_BROADCAST` messages for system-wide logging:
-
+### 4.4 LogBroadcastPayload
 ```python
 class LogBroadcastPayload(BaseModel):
-    level: str                        # Log level ("INFO", "DEBUG", "WARNING", "ERROR")
-    message: str                      # Log message content
-    component: Optional[str] = None   # Component that generated the log
+    level: str                        # "DEBUG", "INFO", "WARNING", "ERROR"
+    message: str                      # Human-readable log string
+    component: Optional[str] = None   # Source micro-agent name
 ```
 
-## Message Routing and Delivery
+### 4.5 ValidationRequestPayload & ValidationResponsePayload
+```python
+class ValidationRequestPayload(BaseModel):
+    claim: str                        # Scientific hypothesis to verify
+    source_url: str                   # Primary source URL or DOI
+    validation_type: str = "fact_check"
 
-### Message Bus Architecture
+class ValidationResponsePayload(BaseModel):
+    is_valid: bool                    # Verification verdict (True if ENTAILED)
+    confidence: float                 # Calibrated confidence score (0.0 to 1.0)
+    evidence: str                     # 1-sentence verbatim grounding quote from premise
+    source: str = "fact_checker_agent"
+```
 
-SentinelARC uses a centralized message bus for routing ACP messages:
+---
+
+## 5. Message Bus Infrastructure (`RabbitMQBus`)
+
+In SentinelARC, the message bus is implemented by [`src/message_bus/rabbitmq_bus.py`](file:///home/iiitl/SentinelARC/src/message_bus/rabbitmq_bus.py) utilizing async AMQP connection adapters.
+
+### Routing Topology
+- **Direct Exchange**: `synapse.direct`
+  - Routes messages where `receiver_id` matches the queue binding.
+  - Queues: `orchestrator`, `search_agent`, `extraction_agent`, `fact_checker_agent`, `synthesis_agent`, `file_save_agent`.
+- **Topic Exchange**: `synapse.topics`
+  - Routes broadcast events based on topic wildcard routing patterns (e.g., `logs.*`, `metrics.#`).
+  - Subscribers: `logger_agent`, Prometheus metrics scrapers.
 
 ```python
-class MessageBus:
-    def __init__(self):
-        self.agents = {}  # agent_id -> agent_instance mapping
-    
-    def route_message(self, message: ACPMessage):
-        if message.receiver_id:
-            # Direct message routing
-            if message.receiver_id in self.agents:
-                target_agent = self.agents[message.receiver_id]
-                target_agent.receive_message(message)
-        elif message.topic:
-            # Broadcast message routing
-            for agent in self.agents.values():
-                if hasattr(agent, 'subscribed_topics'):
-                    if message.topic in agent.subscribed_topics:
-                        agent.receive_message(message)
+class RabbitMQBus:
+    def __init__(self, rabbitmq_url: str):
+        self.rabbitmq_url = rabbitmq_url
+        self.direct_exchange = "synapse.direct"
+        self.topic_exchange = "synapse.topics"
+        self.agent_subscribers: Dict[str, Callable] = {}
+        self.topic_subscribers: Dict[str, Set[Callable]] = {}
+
+    async def send_to_agent(self, receiver_id: str, message: ACPMessage):
+        """Publishes directly to synapse.direct with routing_key=receiver_id."""
+        ...
+
+    async def broadcast(self, topic: str, message: ACPMessage):
+        """Publishes to synapse.topics with routing_key=topic."""
+        ...
 ```
 
-### Agent Message Handling
+---
 
-Agents implement the `handle_message` method to process incoming ACP messages:
+## 6. End-to-End Hub-and-Spoke Sequence
 
-```python
-class ExampleAgent(BaseAgent):
-    def handle_message(self, message: ACPMessage):
-        if message.msg_type == ACPMsgType.TASK_ASSIGN:
-            self._handle_task_assignment(message)
-        elif message.msg_type == ACPMsgType.STATUS_UPDATE:
-            self._handle_status_update(message)
-        # ... handle other message types
-```
-
-## Error Handling and Validation
-
-### Message Validation
-
-All ACP messages are validated using Pydantic models:
-
-```python
-try:
-    message = ACPMessage(**raw_message_data)
-    payload = TaskAssignPayload(**message.payload)
-except ValidationError as e:
-    print(f"Invalid ACP message: {e}")
-    # Handle validation error
-```
-
-### Error Reporting
-
-Agents can report errors through status updates:
-
-```python
-error_status = ACPMessage(
-    sender_id=self.agent_id,
-    receiver_id="orchestrator",
-    msg_type=ACPMsgType.STATUS_UPDATE,
-    payload=StatusUpdatePayload(
-        status=f"task_failed: {error_message}",
-        progress=0.0,
-        task_id=task_id
-    ).model_dump()
-)
-```
-
-## Security Considerations
-
-### Message Authenticity
-
-- All messages include a `sender_id` for traceability
-- Message bus validates sender identity before routing
-- Agents should validate expected sender for sensitive operations
-
-### Access Control
-
-- Topic subscriptions control which agents receive broadcast messages
-- Direct messaging requires knowledge of target agent ID
-- Payload validation prevents malformed data injection
-
-### Audit Trail
-
-- All messages can include timestamps for audit logging
-- LoggerAgent maintains comprehensive message history
-- Message routing through central bus enables monitoring
-
-## Best Practices
-
-### Message Design
-
-1. **Use Specific Payload Types**: Define custom payload models for different message types
-2. **Include Task IDs**: Use task identifiers to correlate related messages
-3. **Provide Progress Updates**: Send regular status updates for long-running tasks
-4. **Handle Failures Gracefully**: Always send error status updates when tasks fail
-
-### Agent Implementation
-
-1. **Validate Message Types**: Check `msg_type` before processing messages
-2. **Implement Timeouts**: Don't wait indefinitely for responses
-3. **Use Appropriate Communication Patterns**: Choose direct vs. broadcast appropriately
-4. **Log Important Events**: Use `LOG_BROADCAST` for system observability
-
-### Performance Optimization
-
-1. **Batch Related Messages**: Combine multiple updates into single messages when appropriate
-2. **Use Async Processing**: Handle messages asynchronously to prevent blocking
-3. **Implement Backpressure**: Monitor queue sizes and implement flow control
-4. **Cache Frequently Used Data**: Avoid repeated data submissions
-
-## Example Workflows
-
-### Research Workflow
+The following sequence details how ACP messages coordinate the complete research lifecycle:
 
 ```
-1. System → Orchestrator: TASK_ASSIGN(research_query)
-2. Orchestrator → SearchAgent: TASK_ASSIGN(web_search)
-3. SearchAgent → Orchestrator: STATUS_UPDATE(searching)
-4. SearchAgent → Orchestrator: DATA_SUBMIT(search_results)
-5. Orchestrator → ExtractionAgent: TASK_ASSIGN(extract_content)
-6. ExtractionAgent → Topic("logs"): LOG_BROADCAST(extraction_started)
-7. ExtractionAgent → Orchestrator: DATA_SUBMIT(extracted_content)
-8. Orchestrator → SynthesisAgent: TASK_ASSIGN(synthesize_report)
-9. SynthesisAgent → Orchestrator: DATA_SUBMIT(final_report)
+FastAPI           Orchestrator        SearchAgent       ExtractionAgent    FactChecker       SynthesisAgent     FileSaveAgent
+   │                   │                   │                   │                │                  │                  │
+   ├── start_research ─►                   │                   │                │                  │                  │
+   │                   ├── TASK_ASSIGN ───►│                   │                │                  │                  │
+   │                   │   (web_search)    │                   │                │                  │                  │
+   │                   │◄── DATA_SUBMIT ───┤                   │                │                  │                  │
+   │                   │   (papers list)   │                   │                │                  │                  │
+   │                   │                                       │                │                  │                  │
+   │                   ├── TASK_ASSIGN (batch_extract) ───────►│                │                  │                  │
+   │                   │◄── DATA_SUBMIT (clean IMRAD text) ────┤                │                  │                  │
+   │                   │                                                        │                  │                  │
+   │                   ├── TASK_ASSIGN (4-layer fact-check) ───────────────────►│                  │                  │
+   │                   │◄── DATA_SUBMIT (NLI verdicts & consensus) ─────────────┤                  │                  │
+   │                   │                                                                           │                  │
+   │                   ├── TASK_ASSIGN (synthesize 5-part report) ────────────────────────────────►│                  │
+   │                   │◄── DATA_SUBMIT (final markdown survey) ───────────────────────────────────┤                  │
+   │                   │                                                                                              │
+   │                   ├── TASK_ASSIGN (atomic save & db write) ─────────────────────────────────────────────────────►│
+   │                   │◄── DATA_SUBMIT (save_complete & sha256) ─────────────────────────────────────────────────────┤
+   │                   │
+   ◄── Workflow Done ──┤
 ```
 
-### Fact-Checking Workflow
+---
 
-```
-1. SynthesisAgent → FactCheckerAgent: VALIDATION_REQUEST(claim)
-2. FactCheckerAgent → SynthesisAgent: VALIDATION_RESPONSE(result)
-3. SynthesisAgent → Topic("logs"): LOG_BROADCAST(fact_check_complete)
-```
+## 7. Strict Task Correlation & Concurrency Control
 
-## Conclusion
-
-The Agent Communication Protocol provides a robust foundation for building complex multi-agent systems like SentinelARC. Its combination of type safety, flexible routing, and comprehensive error handling enables agents to collaborate effectively while maintaining system observability and reliability.
-
-
-## 🚀 V2 Addendum: Strict UUID Task Tracking
-To prevent Agentic cross-talk across overlapping workflows, ACP payloads now strict-enforce `task_id` routing matching.
+To guarantee zero cross-talk across concurrent multi-user workloads:
+1. Every payload originating from the user request carries `task_id`.
+2. Agents must echo the `task_id` in all response payloads (`STATUS_UPDATE`, `DATA_SUBMIT`).
+3. The Orchestrator resolves incoming payloads via `self.active_workflows[message.payload["task_id"]]`. Payloads lacking a known `task_id` are rejected with a warning log, ensuring robust multi-tenant operation.

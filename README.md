@@ -90,11 +90,10 @@ flowchart TD
 git clone https://github.com/Ashishparmar265/SentinelARC.git
 cd SentinelARC
 
-# Deploy infrastructure and build agents
+# Deploy full stack with Docker Compose (Agents, MCP, RabbitMQ, Streamlit, Prometheus, Grafana)
 docker-compose -f docker-compose.optimized.yml up --build -d
 
-# Launch the frontend
-streamlit run streamlit_app.py
+# Access Streamlit Dashboard at http://localhost:8501
 ```
 
 ## Project Structure
@@ -103,12 +102,15 @@ streamlit run streamlit_app.py
 SentinelARC/
 ├── phantom-supervisor/      # C++ Interceptor & CRIU Lifecycle Manager
 ├── src/                     # Core Python backend and API servers
-│   ├── agents/              # Specialized async AI workers
-│   ├── mcp_servers/         # Production REST interfaces
-│   └── database.py          # State and report management
-├── docs/                    # Architectural documentation
-├── streamlit_app.py         # Frontend application
-└── docker-compose.optimized.yml # Infrastructure definition
+│   ├── agents/              # Specialized async AI workers (Search, Extract, Fact-Check, Synthesis, FileSave)
+│   ├── mcp_servers/         # FastAPI MCP servers (Primary Tooling :8001, Filesystem :8002)
+│   ├── message_bus/         # Async AMQP message bus (RabbitMQ)
+│   ├── protocols/           # ACP schemas and MCP tool specifications
+│   └── database.py          # State, authentication, and SQLite cache management
+├── docs/                    # Comprehensive system documentation & interview prep
+├── streamlit_app.py         # Responsive Streamlit web dashboard
+├── async_main.py            # FastAPI gateway and swarm orchestration runtime
+└── docker-compose.optimized.yml # Production multi-container infrastructure
 ```
 
 ## Documentation
@@ -116,11 +118,18 @@ SentinelARC/
 * [System Optimizations & Interview Study Guide](docs/OPTIMIZATIONS_AND_INTERVIEW_PREP.md): Deep-dive engineering breakdown of latency reductions, multi-source ingestion, citation velocity, 4-layer verification, and system design Q&A.
 * [100 Technical Interview Questions](docs/INTERVIEW_QUESTIONS.md): 100 comprehensive technical and system design interview questions with detailed, authentic answers.
 * [System Architecture](docs/ARCHITECTURE.md): Detailed infrastructure topology, swarm pipelines, multi-layer caching, and CRIU integration.
-* [Filesystem Protocol, Storage Resilience & Dashboard UI Enhancements](docs/FILESYSTEM_STORAGE_AND_UI_ENHANCEMENTS.md): Full technical breakdown of the expanded MCP filesystem suite, atomic file swapping, SHA-256 provenance, metadata sidecars, and Streamlit dashboard overhaul.
+* [System Flow & Lifecycle](docs/architecture_flow.md): Step-by-step trace of research queries through the hub-and-spoke swarm.
+* [Line-by-Line Code Explanation](docs/line_by_line_explanation.md): Granular code breakdown of orchestrator state, search velocity, batch extraction, and atomic writes.
+* [Agent Communication Protocol (ACP) Spec](docs/ACP_SPEC.md): Full protocol specification, Pydantic schemas, and AMQP exchange topologies.
+* [Model Context Protocol (MCP) In-Depth](docs/MCP_IN_DEPTH.md): SSE progress notifications, MCP Roots security model, and tool endpoints.
+* [Filesystem Protocol, Storage Resilience & Dashboard UI Enhancements](docs/FILESYSTEM_STORAGE_AND_UI_ENHANCEMENTS.md): Full technical breakdown of the expanded MCP filesystem suite, atomic file swapping, SHA-256 provenance, and metadata sidecars.
 * [API & Protocols Reference](docs/API_REFERENCE.md): REST endpoints, Agent Communication Protocol (ACP) schemas, and SQLite database tables.
-* [Phantom Supervisor Integration](Phantom_Supervisor_Integration.md): Technical breakdown of the AMQP heartbeat proxy.
-* [System Validation Report](SYSTEM_VALIDATION_REPORT.md): Load testing and QA validation results.
-* [Phantom Supervisor Integration](Phantom_Supervisor_Integration.md): Technical breakdown of the AMQP heartbeat proxy.
+* [Problem Resolution Log](docs/problem_resolution_log.md): 21 documented production bugs, edge-cases, and their engineering resolutions.
+* [User Guide](docs/USER_GUIDE.md): Complete guide to using the Streamlit dashboard, research modes, and report exports.
+* [Environment Variables](docs/ENVIRONMENT_VARIABLES.md): Comprehensive listing of all core, MCP, and external API variables.
+* [Production Deployment](docs/PRODUCTION_DEPLOYMENT.md): Kubernetes manifests, Docker Compose sizing, and monitoring topology.
+* [Contributing Guide](docs/CONTRIBUTING.md): Local environment setup, coding standards, and testing procedures.
+* [Phantom Supervisor Integration](Phantom_Supervisor_Integration.md): Technical breakdown of the AMQP heartbeat proxy and CRIU memory freezing.
 * [System Validation Report](SYSTEM_VALIDATION_REPORT.md): Load testing and QA validation results.
 
 ## License

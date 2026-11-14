@@ -1,345 +1,201 @@
 # Model Context Protocol (MCP) In-Depth Guide
 
-> **Architecture Update Note**: This documentation has been modernized for the SentinelARC platform. Where applicable, assume that agents now run under the Phantom Supervisor (CRIU) runtime and communicate through the C++ AMQP Interceptor.
+> **Specification & Architecture**: Model Context Protocol (MCP) in SentinelARC  
+> **Server Implementations**: `src/mcp_servers/fastapi_primary_server.py` (Port 8001) & `src/mcp_servers/fastapi_filesystem_server.py` (Port 8002)
 
+---
 
+## 1. MCP Architectural Paradigm in SentinelARC
 
-## MCP in SentinelARC
+The **Model Context Protocol (MCP)** provides a secure, decoupled, and observable interface between autonomous agents and external operational tooling. Rather than granting agents direct, unconstrained access to OS system calls, disk storage, or network sockets, SentinelARC routes tool operations through dedicated, sandboxed MCP micro-services over HTTP/REST and Server-Sent Events (SSE).
 
-The Model Context Protocol (MCP) serves as the critical bridge between our intelligent agents and their specialized tools in SentinelARC. Unlike traditional API calls or direct method invocations, MCP provides a standardized, secure, and observable way for agents to interact with external capabilities while maintaining strict security boundaries and providing rich feedback mechanisms.
+```
+┌────────────────────────────────────────────────────────┐
+│                   Agent Swarm                          │
+│  (Orchestrator, Extraction, FactChecker, FileSave)     │
+└───────────────┬────────────────────────┬───────────────┘
+                │ HTTP POST / SSE        │ HTTP POST
+                ▼                        ▼
+┌───────────────────────────────┐  ┌───────────────────────────────┐
+│ Primary Tooling MCP Server    │  │ Filesystem MCP Server         │
+│ Port 8001 (FastAPI)           │  │ Port 8002 (FastAPI)           │
+├───────────────────────────────┤  ├───────────────────────────────┤
+│ • /tools/search_web           │  │ • /tools/save_file (Atomic)   │
+│ • /tools/browse_and_extract   │  │ • /tools/read_file            │
+│   (Real-time SSE Progress)    │  │ • /tools/list_directory       │
+│ • /tools/sample_llm           │  │ • /tools/get_file_info        │
+│ • /health                     │  │ • /tools/delete_file          │
+│                               │  │ • /tools/validate_path        │
+│                               │  │ • /health                     │
+│                               │  │ Security: MCP Roots Sandbox   │
+└───────────────────────────────┘  └───────────────────────────────┘
+```
 
-In our architecture, MCP enables agents to:
-- **Access web search and content extraction tools** through the Primary Tooling Server
-- **Perform secure file operations** with built-in path restrictions via the Filesystem Server  
-- **Request AI-assisted text improvements** through sampling mechanisms
-- **Receive real-time progress updates** during long-running operations
-- **Maintain security isolation** between agent logic and tool execution
+### Core Benefits of MCP in Multi-Agent Systems
+1. **Security Sandboxing (MCP Roots)**: Filesystem operations are strictly constrained within predefined directory trees, preventing directory traversal attacks (`../../etc/passwd`).
+2. **Observable Progress Streams**: Long-running operations (such as web browsing or multi-page PDF parsing) stream real-time progress percentages via SSE without blocking event loops.
+3. **Autonomous Evolution**: MCP servers can be scaled, updated, or hardened independently without touching agent code.
 
-This separation of concerns allows our agents to focus on their core intelligence while delegating specialized tasks to purpose-built MCP servers that can be developed, tested, and secured independently.
+---
 
-## Showcasing: Progress Notifications
+## 2. Feature Deep-Dive: Real-Time Progress Notifications via SSE
 
-One of MCP's most powerful features is its ability to provide real-time progress feedback during long-running operations. In SentinelARC, this is demonstrated through our content extraction workflow.
+During content extraction or lengthy web scrapes, user interfaces must not hang or drop spinners. SentinelARC leverages MCP's **Progress Notification** pattern implemented via Server-Sent Events (SSE) with `sse-starlette`.
 
-### Server-Side Implementation
-
-The `PrimaryToolingServer`'s `browse_and_extract` tool showcases progress notifications:
-
+### Server-Side Implementation (`fastapi_primary_server.py`)
 ```python
-def browse_and_extract(self, params: BrowseAndExtractParams, mcp_context: MCPContext) -> Dict:
+@app.post("/tools/browse_and_extract")
+async def browse_and_extract_streaming(params: BrowseAndExtractParams):
     """
-    Browse a URL and extract its main text content with progress reporting.
+    Extracts text content while streaming real-time progress notifications
+    via Server-Sent Events (SSE).
     """
-    print(f"[PrimaryToolingServer] Starting extraction from: {params.url}")
-    
-    # Phase 1: Connect to URL
-    mcp_context.report_progress("Connecting to URL...", 10)
-    time.sleep(1)
-    
-    # Phase 2: Download content
-    mcp_context.report_progress("Downloading content...", 30)
-    time.sleep(1)
-    
-    # Phase 3: Parse HTML
-    mcp_context.report_progress("Parsing HTML structure...", 60)
-    time.sleep(1)
-    
-    # Phase 4: Extract text
-    mcp_context.report_progress("Extracting main content...", 80)
-    time.sleep(0.5)
-    
-    # Final progress update
-    mcp_context.report_progress("Extraction complete", 100)
-    
-    # Return extracted content...
-```
-
-### Client-Side Consumption
-
-The `ExtractionAgent` consumes these progress notifications seamlessly:
-
-```python
-def _extract_content_from_url(self, task_data: Dict):
-    """Extract content with real-time progress monitoring."""
-    
-    # Create MCP context for progress notifications
-    mcp_context = MCPContext(session_id=f"{self.agent_id}_{task_id}")
-    
-    # Call the MCP tool - progress notifications are automatically handled
-    result = self.call_mcp_tool(
-        server_name="primary_tooling",
-        tool_name="browse_and_extract", 
-        params=extraction_params,
-        mcp_context=mcp_context
-    )
-```
-
-The `MCPContext.report_progress()` method handles the progress notifications by printing them to the console and calling any registered callbacks, providing transparency into long-running operations without blocking the agent's execution.
-
-## Showcasing: Security with MCP Roots
-
-MCP Roots represent a fundamental security mechanism that enforces filesystem access boundaries. Our `FileSystemServer` demonstrates this critical security model.
-
-### Security Boundary Enforcement
-
-```python
-class FileSystemServer:
-    def __init__(self, allowed_roots: List[str], server_id: str = "filesystem"):
-        """Initialize with strict root restrictions."""
-        self.allowed_roots = [Path(root).resolve() for root in allowed_roots]
-        
-        # Ensure allowed roots exist
-        for root in self.allowed_roots:
-            root.mkdir(parents=True, exist_ok=True)
-    
-    def _is_path_allowed(self, path_to_check: str) -> bool:
-        """Critical security function preventing directory traversal attacks."""
-        try:
-            target_path = Path(path_to_check).resolve()
-            
-            # Check if path is within any allowed root
-            for allowed_root in self.allowed_roots:
-                try:
-                    target_path.relative_to(allowed_root)
-                    return True
-                except ValueError:
-                    continue
-            
-            return False
-        except (OSError, ValueError):
-            return False
-```
-
-### Secure File Operations
-
-```python
-def save_file(self, params: SaveFileParams) -> Dict:
-    """Save file with MCP Roots security validation."""
-    
-    # CRITICAL: Security check using MCP Roots model
-    if not self._is_path_allowed(params.file_path):
-        error_msg = (
-            f"Access denied: '{params.file_path}' is outside allowed roots. "
-            f"Allowed roots: {[str(r) for r in self.allowed_roots]}"
-        )
-        raise MCPSecurityError(error_msg)
-    
-    # Proceed with file operation only if path is approved
-    target_path = Path(params.file_path).resolve()
-    # ... perform file write ...
-```
-
-This security model ensures that even if an agent is compromised or behaves unexpectedly, it cannot write files outside the predefined safe directories. The `FileSaveAgent` operates within these constraints without needing to implement security logic itself.
-
-## Showcasing: Advanced Use with Sampling
-
-MCP Sampling represents a sophisticated pattern where the traditional client/server roles are reversed. In our implementation, the `SynthesisAgent` demonstrates this by requesting AI assistance for text improvement.
-
-### The Sampling Pattern
-
-```python
-class SynthesisAgent:
-    def _improve_text_with_mcp(self, text: str) -> str:
-        """Improve text using MCP Sampling for sentence rephrasing."""
-        
-        sentences = text.split(". ")
-        improved_sentences = []
-        
-        for sentence in sentences:
-            if len(sentence.strip()) > 50:  # Only improve longer sentences
-                try:
-                    # MCP Sampling: Request AI assistance from client
-                    rephrase_params = {"sentence": sentence.strip()}
-                    result = self.call_mcp_tool(
-                        server_name="user_interaction",
-                        tool_name="rephrase_sentence",
-                        params=rephrase_params
-                    )
-                    
-                    improved_sentence = result.get("rephrased", sentence.strip())
-                    improved_sentences.append(improved_sentence)
-                    
-                except Exception as e:
-                    # Graceful fallback to original text
-                    improved_sentences.append(sentence.strip())
-        
-        return ". ".join(improved_sentences)
-```
-
-### Client-Side Server Implementation
-
-The `UserInteractionServer` acts as a simulated client-side MCP server:
-
-```python
-class UserInteractionServer:
-    def rephrase_sentence(self, params: Dict) -> Dict:
-        """
-        Rephrase using simulated AI assistance.
-        
-        In a real implementation, this would:
-        1. Send the sentence to the main client application
-        2. The client would use its LLM to rephrase
-        3. Return the improved version to the agent
-        """
-        original = params["sentence"]
-        improved = self._improve_sentence(original)
-        
-        return {
-            "original": original,
-            "rephrased": improved,
-            "improvement_type": self._detect_improvement_type(original, improved)
+    async def progress_generator():
+        # Phase 1: Connect to remote host
+        yield {
+            "event": "progress",
+            "data": json.dumps({"status": "Connecting to URL...", "progress": 10.0})
         }
-```
+        await asyncio.sleep(0.2)
 
-### Role Reversal Explanation
-
-In traditional MCP usage:
-- **Client**: The main application (e.g., VS Code, Claude Desktop)
-- **Server**: External tools and capabilities
-
-In MCP Sampling:
-- **Agent**: Requests AI assistance (acts as client)
-- **Main Application**: Provides LLM capabilities (acts as server)
-
-This reversal allows agents running in resource-constrained environments to leverage the powerful AI capabilities of their host application when needed.
-
-## Transports: Stdio vs. StreamableHTTP
-
-Our current implementation uses a model analogous to the **Stdio transport**, where all components run in the same process space with direct method calls simulating the message passing that would occur over stdio streams.
-
-### Current Stdio-like Architecture
-
-```python
-# Direct method invocation simulating stdio message passing
-class ExtractionAgent:
-    def call_mcp_tool(self, server_name: str, tool_name: str, params: Dict):
-        server = self.mcp_servers[server_name]
-        return server.call_tool(tool_name, params)  # Direct call
-```
-
-**Benefits:**
-- Simple debugging and development
-- No network latency or serialization overhead
-- Easier error handling and stack traces
-- Perfect for educational and demonstration purposes
-
-**Limitations:**
-- All components must run in same process
-- No distributed deployment options
-- Limited scalability for resource-intensive tools
-
-### Moving to StreamableHTTP Transport
-
-To transition to a **StreamableHTTP transport**, we would need several architectural changes:
-
-#### 1. Protocol Serialization
-
-```python
-# Current: Direct object passing
-result = server.browse_and_extract(params, mcp_context)
-
-# StreamableHTTP: JSON-RPC over HTTP
-import json
-import requests
-
-def call_mcp_tool_http(self, server_url: str, tool_name: str, params: Dict):
-    payload = {
-        "jsonrpc": "2.0",
-        "method": f"tools/{tool_name}",
-        "params": params,
-        "id": generate_request_id()
-    }
-    
-    response = requests.post(
-        f"{server_url}/mcp", 
-        json=payload,
-        headers={"Content-Type": "application/json"}
-    )
-    
-    return response.json()["result"]
-```
-
-#### 2. Progress Notification Streaming
-
-```python
-# StreamableHTTP progress handling
-async def call_with_progress(self, server_url: str, tool_name: str, params: Dict):
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"{server_url}/mcp/stream", 
-            json={"tool": tool_name, "params": params}
-        ) as response:
-            async for line in response.content:
-                message = json.loads(line)
-                if message["type"] == "progress":
-                    self.handle_progress(message["data"])
-                elif message["type"] == "result":
-                    return message["data"]
-```
-
-#### 3. Server Deployment Changes
-
-```python
-# HTTP MCP Server
-from fastapi import FastAPI
-from sse_starlette.sse import EventSourceResponse
-
-app = FastAPI()
-
-@app.post("/mcp/stream")
-async def stream_tool_execution(request: ToolRequest):
-    async def generate_progress():
-        # Yield progress events
-        yield {"type": "progress", "data": {"message": "Starting...", "percent": 0}}
-        
-        # Execute tool
-        result = await execute_tool(request.tool, request.params)
-        
-        # Yield final result
-        yield {"type": "result", "data": result}
-    
-    return EventSourceResponse(generate_progress())
-```
-
-#### 4. Configuration Management
-
-```python
-# Server registry for distributed deployment
-class MCPServerRegistry:
-    def __init__(self):
-        self.servers = {
-            "primary_tooling": "http://tooling-server:8001",
-            "filesystem": "http://file-server:8002", 
-            "user_interaction": "http://ai-server:8003"
+        # Phase 2: Download raw byte stream
+        yield {
+            "event": "progress",
+            "data": json.dumps({"status": "Downloading content...", "progress": 30.0})
         }
-    
-    def get_server_url(self, server_name: str) -> str:
-        return self.servers[server_name]
+        await asyncio.sleep(0.3)
+
+        # Phase 3: Parse HTML / PDF structure
+        yield {
+            "event": "progress",
+            "data": json.dumps({"status": "Parsing document layout...", "progress": 60.0})
+        }
+
+        # Phase 4: Clean IMRAD text & strip bibliographies
+        yield {
+            "event": "progress",
+            "data": json.dumps({"status": "Extracting main content...", "progress": 80.0})
+        }
+
+        # Final Phase: Complete payload
+        final_result = {
+            "url": params.url,
+            "text": "Cleaned academic text...",
+            "character_count": 14250,
+            "success": True
+        }
+        yield {
+            "event": "result",
+            "data": json.dumps(final_result)
+        }
+
+    return EventSourceResponse(progress_generator())
 ```
 
-### Trade-offs Summary
+### Client-Side Demuxing in Agents (`async_mcp_client.py`)
+The client dynamically reads the chunked SSE stream, invoking agent progress callbacks before returning the final JSON payload:
+```python
+async with session.post(url, json=params) as resp:
+    if "text/event-stream" in resp.headers.get("Content-Type", ""):
+        async for line in resp.content:
+            line_str = line.decode('utf-8').strip()
+            if line_str.startswith("data:"):
+                data = json.loads(line_str[5:].strip())
+                if "progress" in data and progress_callback:
+                    await progress_callback(data["progress"], data.get("status", ""))
+                elif "text" in data:
+                    return data
+    else:
+        # Graceful fallback if server returns direct application/json
+        return await resp.json()
+```
 
-| Aspect | Stdio Transport | StreamableHTTP Transport |
-|--------|----------------|-------------------------|
-| **Deployment** | Single process | Distributed services |
-| **Latency** | Minimal | Network overhead |
-| **Scalability** | Limited | Highly scalable |
-| **Security** | Process isolation | Network + auth required |
-| **Development** | Simple debugging | Complex distributed debugging |
-| **Resource Usage** | Shared process memory | Independent scaling |
+---
 
-For SentinelARC's educational and demonstration purposes, the stdio-like approach provides clarity and simplicity. For production deployments requiring scale and resilience, StreamableHTTP would be the preferred choice.
+## 3. Feature Deep-Dive: Security Sandboxing via MCP Roots
 
-## Conclusion
+The `FileSystemServer` enforces the **MCP Roots Security Model**. The server is initialized with an immutable whitelist of allowed directory paths (`ALLOWED_ROOTS`). Any operation attempting to read, write, or inspect a path outside these roots is aborted with an `HTTP 403 Forbidden` exception.
 
-SentinelARC's MCP implementation demonstrates the protocol's versatility across three key dimensions:
+### Security Boundary Validation (`fastapi_filesystem_server.py`)
+```python
+def _is_path_allowed(path_to_check: str) -> bool:
+    """
+    Verifies that the target path resolves strictly inside an ALLOWED_ROOT.
+    Prevents path traversal attacks (e.g., ../../, null-byte injections, symlink escapes).
+    """
+    try:
+        target_path = Path(path_to_check).resolve()
+        for allowed_root in allowed_roots:
+            try:
+                # relative_to raises ValueError if target_path is not a subpath
+                target_path.relative_to(allowed_root)
+                return True
+            except ValueError:
+                continue
+        return False
+    except (OSError, ValueError):
+        return False
+```
 
-1. **Progress Notifications** enable transparent long-running operations
-2. **MCP Roots** provide robust security boundaries for tool access  
-3. **Sampling** allows sophisticated AI assistance patterns with role reversal
+### POSIX Atomic File Operations & Integrity Verification
+To eliminate partial writes or 0-byte file corruptions if a container is terminated during file persistence, the Filesystem MCP Server implements **Atomic Tempfile Writes** with synchronous kernel flushing and SHA-256 calculation:
 
-These patterns, combined with flexible transport options, make MCP a powerful foundation for building secure, observable, and scalable agent-tool interactions in modern AI systems.
+```python
+def _write_file_sync(target_path: Path, content: str, atomic: bool = True) -> tuple[int, str]:
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    content_bytes = content.encode("utf-8")
+    checksum = hashlib.sha256(content_bytes).hexdigest()
 
+    if atomic:
+        # Write to temporary file in the EXACT same parent directory (same filesystem mount)
+        with tempfile.NamedTemporaryFile("wb", dir=target_path.parent, delete=False, prefix=".tmp_") as tmp:
+            tmp.write(content_bytes)
+            tmp.flush()
+            os.fsync(tmp.fileno())  # Force kernel write to physical disk
+            tmp_path = Path(tmp.name)
+            
+        # Atomic POSIX rename replaces target in a single kernel step
+        tmp_path.replace(target_path)
+    else:
+        with open(target_path, "wb") as f:
+            f.write(content_bytes)
 
-## 🚀 V2 Addendum: Extraction Redundancy
-While MCP effectively provides tooling hooks, the system now enforces application-level validation verifying the length of the string extracted. If the MCP tool fails to scrape DOM layouts appropriately, the Agent cascades down into using the `fallback_abstract` cached from the upstream search packet.
+    return len(content_bytes), checksum
+```
+
+---
+
+## 4. Complete Filesystem MCP Tool Suite
+
+The Filesystem MCP Server (`:8002`) provides a complete 5-tool lifecycle suite:
+
+| Tool Name | Endpoint | Purpose | Key Parameters |
+|---|---|---|---|
+| `save_file` | `POST /tools/save_file` | Saves content with atomic swap & SHA-256 | `file_path`, `content`, `atomic` |
+| `read_file` | `POST /tools/read_file` | Reads file with offset, length, & checksum | `file_path`, `max_bytes`, `offset` |
+| `list_directory` | `POST /tools/list_directory` | Lists directory contents with metadata | `directory_path`, `recursive` |
+| `get_file_info` | `POST /tools/get_file_info` | Retrieves file size, timestamps, & hash | `file_path` |
+| `delete_file` | `POST /tools/delete_file` | Safely removes files within allowed roots | `file_path` |
+| `validate_path` | `POST /tools/validate_path` | Pre-checks path permissions against roots | `path` |
+
+---
+
+## 5. Primary Tooling MCP Suite
+
+The Primary Tooling Server (`:8001`) provides:
+
+| Tool Name | Endpoint | Purpose |
+|---|---|---|
+| `search_web` | `POST /tools/search_web` | Web search and scholarly discovery |
+| `browse_and_extract` | `POST /tools/browse_and_extract` | SSE streaming web page extraction |
+| `sample_llm` | `POST /tools/sample_llm` | AI sampling for context enrichment |
+| `health_check` | `GET /health` | Container orchestration health probe |
+
+---
+
+## 6. Prometheus Telemetry Integration
+
+Both MCP servers integrate `prometheus-fastapi-instrumentator`. When `METRICS_ENABLED=true`, endpoints automatically export metrics on `/metrics`:
+- `http_requests_total`: Total invocations per tool endpoint.
+- `http_request_duration_seconds`: Request latency distribution (p50, p95, p99).
+- `http_requests_in_progress`: Real-time active requests.
