@@ -10,9 +10,16 @@ import json
 import logging
 from typing import Callable, Dict, Optional, Set
 from urllib.parse import urlparse
-import pika
-from pika.adapters.asyncio_connection import AsyncioConnection
-from pika.exceptions import AMQPConnectionError
+try:
+    import pika
+    from pika.adapters.asyncio_connection import AsyncioConnection
+    from pika.exceptions import AMQPConnectionError
+    HAS_PIKA = True
+except ImportError:
+    HAS_PIKA = False
+    pika = None
+    AsyncioConnection = None
+    AMQPConnectionError = Exception
 
 from ..protocols.acp_schema import ACPMessage, ACPMsgType
 

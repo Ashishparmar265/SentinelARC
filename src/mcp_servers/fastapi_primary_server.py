@@ -12,11 +12,17 @@ import os
 from typing import Dict, Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
-from sse_starlette.sse import EventSourceResponse
+try:
+    from sse_starlette.sse import EventSourceResponse
+except ImportError:
+    EventSourceResponse = None
 from pydantic import BaseModel
 
 # Prometheus monitoring
-from prometheus_fastapi_instrumentator import Instrumentator
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+except ImportError:
+    Instrumentator = None
 
 from ..protocols.mcp_schemas import (
     SearchWebParams, BrowseAndExtractParams,
@@ -41,7 +47,7 @@ def create_primary_app() -> FastAPI:
 
     # Configure Prometheus monitoring if enabled
     metrics_enabled = os.getenv("METRICS_ENABLED", "false").lower() == "true"
-    if metrics_enabled:
+    if metrics_enabled and Instrumentator:
         instrumentator = Instrumentator(
             should_group_status_codes=False,
             should_ignore_untemplated=True,

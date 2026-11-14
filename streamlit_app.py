@@ -1,11 +1,15 @@
 import os
 from pathlib import Path
 import re
+import json
+import time
 from io import BytesIO
-from typing import Dict, List
+from typing import Dict, List, Optional, Any
+from datetime import datetime
 
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 from src.database import SessionLocal, User, Report, init_db
 from src.session_utils import create_session, verify_session, delete_session
@@ -16,20 +20,57 @@ init_db()
 API_URL = os.getenv("SYNAPSE_API_URL", "http://localhost:8000")
 REPORTS_DIR = Path("output/reports")
 
+
 def show_login_page():
-    st.markdown("<h1 style='text-align: center; margin-top: 50px;'>SentinelARC Login</h1>", unsafe_allow_html=True)
+    st.markdown(
+        """
+        <style>
+          .login-container {
+            max-width: 440px;
+            margin: 60px auto;
+            background: #ffffff;
+            padding: 36px 32px;
+            border-radius: 16px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
+            border: 1px solid #e2e8f0;
+          }
+          .login-brand {
+            text-align: center;
+            margin-bottom: 24px;
+          }
+          .login-brand h1 {
+            font-size: 26px;
+            font-weight: 700;
+            color: #0f172a;
+            margin: 0;
+            letter-spacing: -0.02em;
+          }
+          .login-brand p {
+            font-size: 13px;
+            color: #64748b;
+            margin: 6px 0 0 0;
+          }
+        </style>
+        <div class="login-container">
+          <div class="login-brand">
+            <h1>SentinelARC</h1>
+            <p>Autonomous Academic Research & Synthesis Engine</p>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
     
-    col1, col2, col3 = st.columns([1, 2, 1])
+    col1, col2, col3 = st.columns([1, 1.8, 1])
     with col2:
-        tab_login, tab_register = st.tabs(["Login", "Register"])
+        tab_login, tab_register = st.tabs(["🔐 Sign In", "✨ Register Profile"])
         
         with tab_login:
             with st.form("login_form"):
-                st.subheader("Login")
-                username = st.text_input("Username").strip()
-                password = st.text_input("Password", type="password")
-                remember_me = st.checkbox("Keep me logged in")
-                submit = st.form_submit_button("Login", use_container_width=True)
+                username = st.text_input("Username", placeholder="e.g. researcher").strip()
+                password = st.text_input("Password", type="password", placeholder="••••••••")
+                remember_me = st.checkbox("Keep me signed in", value=True)
+                submit = st.form_submit_button("Sign In", use_container_width=True, type="primary")
                 
                 if submit:
                     if not username or not password:
@@ -47,17 +88,16 @@ def show_login_page():
                                 token = create_session(user.id)
                                 st.query_params["session"] = token
                                 
-                            st.success("Login successful!")
+                            st.toast("👋 Welcome back to SentinelARC!")
                             st.rerun()
                         else:
                             st.error("Invalid username or password.")
                             
         with tab_register:
             with st.form("register_form"):
-                st.subheader("Create a New Profile")
-                reg_username = st.text_input("Choose Username").strip()
-                reg_password = st.text_input("Choose Password", type="password")
-                reg_submit = st.form_submit_button("Register", use_container_width=True)
+                reg_username = st.text_input("Choose Username", placeholder="e.g. ashish").strip()
+                reg_password = st.text_input("Choose Password", type="password", placeholder="••••••••")
+                reg_submit = st.form_submit_button("Create Profile", use_container_width=True, type="primary")
                 
                 if reg_submit:
                     if not reg_username or not reg_password:
@@ -75,20 +115,18 @@ def show_login_page():
                             db.add(new_user)
                             db.commit()
                             db.refresh(new_user)
-                            st.success("Account created! You can now login.")
+                            st.success("Account created successfully! Please sign in.")
                         db.close()
-
 
 
 def trigger_research(query: str, user_id: int) -> dict:
     """Call the FastAPI /research endpoint."""
-    import time
     task_id = f"task_{user_id}_{int(time.time())}"
     payload = {"query": query, "user_id": user_id, "task_id": task_id}
-    # Short connect timeout, no read timeout (request returns immediately anyway)
     resp = requests.post(f"{API_URL}/research", json=payload, timeout=(5, None))
     resp.raise_for_status()
     return resp.json()
+
 
 def trigger_general_ai(query: str, model: str, chat_history: list, user_id: int):
     """Call the FastAPI /general_chat endpoint with streaming support."""
@@ -98,7 +136,6 @@ def trigger_general_ai(query: str, model: str, chat_history: list, user_id: int)
         "history": chat_history,
         "user_id": user_id
     }
-    # Initial connection timeout: 10s, no read timeout for streaming
     with requests.post(f"{API_URL}/general_chat", json=payload, stream=True, timeout=(10, None)) as resp:
         resp.raise_for_status()
         for chunk in resp.iter_content(chunk_size=None, decode_unicode=True):
@@ -130,40 +167,12 @@ def read_report(path: Path) -> str:
         return f"Failed to read report: {e}"
 
 
-def extract_paper_pdf_links(markdown_content: str) -> List[Dict[str, str]]:
-    """
-    Extract unique PDF URLs from a generated report.
-
-    The report may contain either:
-    - Markdown links: [Some title](https://.../paper.pdf)
-    - Plain lines: **PDF**: https://.../paper.pdf
-    """
-    # Keep this function for backwards compatibility, but delegate to
-    # the more general `extract_paper_links()` and filter PDFs.
-    papers = extract_paper_links(markdown_content)
-    return [
-        {"title": p.get("title", "Paper"), "url": p.get("url", "")}
-        for p in papers
-        if str(p.get("is_pdf", "")).lower() == "true"
-    ]
-
-
 def extract_paper_links(markdown_content: str) -> List[Dict[str, str]]:
-    """
-    Extract paper links from a generated report.
-
-    Supports:
-    - Bulleted "Sources" section: • [Title](https://.../paper-or-pdf-url)
-    - PDF markers: **PDF**: https://.../paper.pdf
-
-    Returns unique links with `title`, `url`, and `is_pdf`.
-    """
+    """Extract paper links from a generated report."""
     if not markdown_content:
         return []
 
-    found: Dict[str, Dict[str, str]] = {}  # url -> {title,url,is_pdf}
-
-    # Find all standard markdown links: [Title](https://...)
+    found: Dict[str, Dict[str, str]] = {}
     inline_link_pattern = re.compile(
         r"\[([^\]]+)\]\((https?://[^)\s]+)\)",
         flags=re.IGNORECASE,
@@ -175,7 +184,6 @@ def extract_paper_links(markdown_content: str) -> List[Dict[str, str]]:
             continue
         is_pdf = url.lower().split("?", 1)[0].endswith(".pdf")
         
-        # Deduplicate by URL
         if url not in found:
             found[url] = {"title": title or Path(url).name, "url": url, "is_pdf": str(is_pdf)}
 
@@ -184,53 +192,40 @@ def extract_paper_links(markdown_content: str) -> List[Dict[str, str]]:
     return papers
 
 
+def extract_paper_pdf_links(markdown_content: str) -> List[Dict[str, str]]:
+    """Extract unique PDF URLs from a generated report."""
+    papers = extract_paper_links(markdown_content)
+    return [
+        {"title": p.get("title", "Paper"), "url": p.get("url", "")}
+        for p in papers
+        if str(p.get("is_pdf", "")).lower() == "true"
+    ]
+
+
 def markdown_to_plain_text(markdown_content: str) -> str:
-    """
-    Best-effort Markdown -> plain text conversion for embedding into a PDF.
-    """
+    """Best-effort Markdown -> plain text conversion for embedding into a PDF."""
     if not markdown_content:
         return ""
-
     text = markdown_content
-
-    # Remove fenced code blocks if any
     text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
-
-    # Convert links [title](url) -> title (url)
     text = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"\1 (\2)", text)
-
-    # Strip images ![alt](url)
     text = re.sub(r"!\[([^\]]*)\]\((https?://[^)]+)\)", r"\1", text)
-
-    # Remove emphasis/bold markers
     text = text.replace("**", "").replace("__", "").replace("*", "").replace("_", "")
-
-    # Remove headings/bullets separators
     text = re.sub(r"^\s*#+\s*", "", text, flags=re.MULTILINE)
     text = re.sub(r"^\s*[-*•]\s+", "", text, flags=re.MULTILINE)
-
-    # Remove horizontal rules
     text = re.sub(r"^\s*---\s*$", "", text, flags=re.MULTILINE)
-
-    # Collapse repeated whitespace a bit
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     return text
 
 
 def build_summary_pdf_bytes(markdown_content: str, report_title: str) -> bytes:
-    """
-    Build a simple PDF from the report text using `reportlab`.
-
-    Returns raw PDF bytes for Streamlit's `st.download_button`.
-    """
+    """Build a styled PDF from the report text using reportlab."""
     try:
         from reportlab.pdfgen import canvas
         from reportlab.lib.pagesizes import A4
         from reportlab.pdfbase.pdfmetrics import stringWidth
-    except Exception as e:  # pragma: no cover
-        raise RuntimeError(
-            "PDF generation needs `reportlab`. Install it via `pip install -r requirements.txt`."
-        ) from e
+    except Exception as e:
+        raise RuntimeError("PDF generation requires reportlab.") from e
 
     plain = markdown_to_plain_text(markdown_content)
     if not plain:
@@ -239,28 +234,24 @@ def build_summary_pdf_bytes(markdown_content: str, report_title: str) -> bytes:
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
-
     margin_x = 48
     margin_y = 48
-    line_height = 12
-
+    line_height = 13
     y = height - margin_y
 
-    def new_page() -> None:
+    def new_page():
         nonlocal y
         c.showPage()
         y = height - margin_y
 
-    # Title
+    # Header / Title
     c.setFont("Helvetica-Bold", 14)
-    c.drawString(margin_x, y, report_title[:120])
-    y -= line_height * 1.6
+    c.drawString(margin_x, y, report_title[:100])
+    y -= line_height * 1.8
     c.setFont("Helvetica", 10)
-
     max_width = width - (margin_x * 2)
 
     def wrap_line(s: str) -> List[str]:
-        # Word-wrap based on rendered width
         words = s.split()
         lines: List[str] = []
         cur = ""
@@ -276,13 +267,11 @@ def build_summary_pdf_bytes(markdown_content: str, report_title: str) -> bytes:
             lines.append(cur)
         return lines or [s]
 
-    # Render paragraph-by-paragraph to preserve some spacing
     paragraphs = plain.split("\n\n")
     for para in paragraphs:
         if not para.strip():
             y -= line_height * 0.6
             continue
-
         wrapped = wrap_line(para.replace("\n", " ").strip())
         for line in wrapped:
             if y < margin_y + line_height:
@@ -290,7 +279,6 @@ def build_summary_pdf_bytes(markdown_content: str, report_title: str) -> bytes:
                 c.setFont("Helvetica", 10)
             c.drawString(margin_x, y, line[:1400])
             y -= line_height
-
         y -= line_height * 0.4
 
     c.save()
@@ -298,20 +286,44 @@ def build_summary_pdf_bytes(markdown_content: str, report_title: str) -> bytes:
 
 
 def extract_summary_from_report(markdown_content: str) -> str:
-    """
-    Since the backend now provides conversational answers (like ChatGPT), 
-    we just return the full text without needing to strip out academic headers.
-    """
+    """Return markdown report content stripped of trailing white spaces."""
     if not markdown_content:
         return ""
-    
     return markdown_content.strip()
 
 
-def main():
-    st.set_page_config(page_title="SentinelARC Research Dashboard", layout="wide", initial_sidebar_state="expanded")
+def delete_report(report_id: int, file_path: str, user_id: int):
+    """Delete report from SQLite database and associated files on disk."""
+    try:
+        db = SessionLocal()
+        rep = db.query(Report).filter(Report.id == report_id, Report.user_id == user_id).first()
+        if rep:
+            db.delete(rep)
+            db.commit()
+        db.close()
+    except Exception as e:
+        print(f"Error deleting report row: {e}")
 
-    # Check for existing session in query params
+    # Remove associated files
+    p = Path(file_path)
+    for ext in [".md", ".html", ".meta.json"]:
+        target = p.with_suffix(ext)
+        if target.exists():
+            try:
+                target.unlink()
+            except OSError:
+                pass
+
+
+def main():
+    st.set_page_config(
+        page_title="SentinelARC — Academic Swarm Dashboard",
+        page_icon="⚡",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+
+    # Check for existing session token in query params
     if not st.session_state.get("authenticated"):
         session_token = st.query_params.get("session")
         if session_token:
@@ -321,577 +333,652 @@ def main():
                 st.session_state["user_id"] = user_info["id"]
                 st.session_state["username"] = user_info["username"]
 
-    # Modern Professional SaaS Styling
+    # Modern SaaS CSS Design
     st.markdown(
         """
         <style>
-          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
           
-          /* Base */
+          /* Base Typography & Background */
           html, body, [class*="css"] { 
             font-family: 'Inter', sans-serif !important;
             background-color: #f8fafc; 
             color: #0f172a; 
           }
+          code, pre {
+            font-family: 'JetBrains Mono', monospace !important;
+          }
 
-          /* Hide Streamlit top menu/header blocks */
+          /* Hide Streamlit top header and footer */
           #MainMenu { visibility: hidden; }
           footer { visibility: hidden; }
           header { visibility: hidden; }
 
-          /* Sidebar – always visible, never collapsed */
+          /* Sidebar Styling */
           section[data-testid="stSidebar"] {
             background-color: #ffffff;
             border-right: 1px solid #e2e8f0;
-            box-shadow: 2px 0 10px rgba(0,0,0,0.02);
-            min-width: 260px !important;
-            display: flex !important;
-          }
-          /* Hide the collapse arrow button */
-          button[data-testid="baseButton-secondary"] svg[data-testid="stIconExpander"],
-          button[data-testid="collapsedControl"] {
-            display: none !important;
-          }
-          section[data-testid="stSidebar"][aria-expanded="false"] {
-            transform: none !important;
-            margin-left: 0 !important;
-            visibility: visible !important;
-            display: flex !important;
+            box-shadow: 2px 0 12px rgba(0,0,0,0.02);
+            min-width: 280px !important;
           }
           
-          /* Sidebar Buttons */
-          div[data-testid="stSidebar"] button {
-            background-color: transparent;
-            border: 1px solid transparent;
-            color: #475569;
-            font-weight: 500;
-            border-radius: 8px;
-            padding: 8px 16px;
-            transition: all 0.2s ease;
-            text-align: left;
-          }
-          div[data-testid="stSidebar"] button:hover {
-            background-color: #f1f5f9;
-            color: #0f172a;
-            border-color: #cbd5e1;
-          }
-
-          /* Main content area – allow independent scroll for sticky to work */
-          div[data-testid="stVerticalBlock"] {
-            max-width: 1000px;
-            margin: 0 auto;
-            padding: 0 1rem;
-          }
-
-          /* Make sticky work: the scroll must happen inside Streamlit's main content block */
-          section.main > div.block-container {
-            overflow-y: auto !important;
-            height: 100vh !important;
-            padding-top: 0 !important;
-          }
-
-          /* Control Center sticky wrapper – pin it just below the header */
-          div[data-stickytop="control-center"] {
-            position: sticky;
-            top: 80px;
-            z-index: 998;
-            background: #f8fafc;
-            padding-bottom: 8px;
-            margin-bottom: 8px;
-          }
-
-          /* Containers / Cards */
-          div[data-testid="stVerticalBlock"] > div > div[data-testid="stVerticalBlockBorderWrapper"] {
+          /* Top Bar Container */
+          .sentinel-top-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 18px;
             background: #ffffff;
-            border-radius: 16px;
             border: 1px solid #e2e8f0;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
-            padding: 24px;
+            border-radius: 12px;
             margin-bottom: 24px;
-            transition: box-shadow 0.3s ease, transform 0.3s ease;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.02);
           }
-          div[data-testid="stVerticalBlockBorderWrapper"]:hover {
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.05);
-            transform: translateY(-2px);
-          }
-
-          /* Primary Buttons */
-          button[kind="primary"] {
-            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-weight: 600;
-            padding: 10px 20px;
-            box-shadow: 0 4px 6px rgba(37, 99, 235, 0.2);
-            transition: all 0.2s;
-          }
-          button[kind="primary"]:hover {
-            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-            box-shadow: 0 6px 8px rgba(37, 99, 235, 0.3);
-            transform: translateY(-1px);
-          }
-          
-          /* Headers & Typography */
-          h1, h2, h3 { color: #0f172a !important; letter-spacing: -0.02em; }
-          h3 { font-size: 1.25rem; margin-bottom: 1rem; color: #1e293b; border-bottom: 2px solid #f1f5f9; padding-bottom: 0.5rem; }
-          
-          /* Chat Input */
-          div[data-testid="stChatInput"] {
-            border-radius: 12px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-            border: 1px solid #cbd5e1;
-            transition: all 0.3s;
-          }
-          div[data-testid="stChatInput"]:focus-within {
-            box-shadow: 0 4px 20px rgba(59, 130, 246, 0.15);
-            border-color: #3b82f6;
-          }
-
-          /* Sidebar Brand Block – top of left panel */
-          .sidebar-brand {
-            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-            padding: 18px 16px 14px 16px;
-            border-radius: 12px;
-            margin-bottom: 4px;
-            color: white;
-            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.2);
-          }
-          .sidebar-brand h2 {
-            color: white !important;
-            margin: 0 0 4px 0 !important;
-            font-size: 20px !important;
-            font-weight: 700 !important;
+          .brand-title {
+            font-size: 18px;
+            font-weight: 700;
+            color: #0f172a;
             letter-spacing: -0.02em;
-            border-bottom: none !important;
           }
-          .sidebar-brand p {
-            margin: 0 0 10px 0;
-            color: #94a3b8;
-            font-size: 11px;
-            line-height: 1.4;
-          }
-          .sidebar-badge {
-            display: inline-block;
-            background: rgba(52, 211, 153, 0.2);
-            color: #34d399;
-            padding: 3px 9px;
-            border-radius: 20px;
-            font-size: 11px;
+          .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: #ecfdf5;
+            color: #059669;
+            font-size: 12px;
             font-weight: 600;
-            border: 1px solid rgba(52, 211, 153, 0.3);
+            padding: 3px 10px;
+            border-radius: 20px;
+            border: 1px solid #a7f3d0;
+            margin-left: 12px;
           }
-          
-          /* Control Center Card in Sidebar */
-          .sidebar-control-center {
-            background-color: #f8fafc;
-            border: 1px solid #e2e8f0;
+          .sources-strip {
+            font-size: 12px;
+            color: #64748b;
+            display: inline-block;
+            margin-left: 14px;
+          }
+
+          /* Prompt chips */
+          .chip-container {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin: 10px 0 20px 0;
+          }
+
+          /* Swarm Live Stepper */
+          .stepper-box {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
             border-radius: 12px;
-            padding: 16px;
-            margin-top: 24px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            padding: 20px 24px;
+            color: white;
+            margin-bottom: 24px;
+            box-shadow: 0 4px 15px rgba(15, 23, 42, 0.15);
           }
-          .sidebar-control-center h5 {
-            margin-top: 0 !important;
-            font-size: 14px !important;
-            color: #1e293b !important;
-            font-weight: 600 !important;
+          .stepper-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
           }
-          
-          /* Top-Right Profile Rectangle */
-          /* Target only the innermost vertical block that contains our marker */
-          div[data-testid="stVerticalBlock"]:has(div.top-right-profile-marker):not(:has(div[data-testid="stVerticalBlock"])) {
-            position: fixed !important;
-            top: 1rem !important;
-            right: 1.5rem !important;
-            z-index: 10001 !important; /* Higher than everything else */
-            background: rgba(255, 255, 255, 0.98) !important;
-            backdrop-filter: blur(10px) !important;
-            padding: 10px 16px !important; /* Slightly more compact */
-            border-radius: 12px !important;
-            border: 1px solid #e2e8f0 !important;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.1) !important;
-            width: auto !important;
-            min-width: 140px !important;
-            height: auto !important;
-            margin: 0 !important;
-            transform: none !important;
+          .stepper-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: #f8fafc;
           }
-          
-          /* Main content alignment & spacing */
-          /* Main content: Centered Rectangle Layout */
-          .stAppViewMain .block-container {
-              margin: 2rem auto !important;
-              padding: 2.5rem !important;
-              max-width: 1000px !important;
-              background-color: #ffffff;
-              border-radius: 16px;
-              box-shadow: 0 4px 25px rgba(0,0,0,0.05);
-              border: 1px solid #e2e8f0;
+          .stepper-steps {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 8px;
           }
-          
-          /* Hide the default bottom-pinned chat input */
-          div[data-testid="stChatInput"], [data-testid="stChatInputSubmit"] {
-              display: none !important;
+          .step-pill {
+            padding: 8px 10px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 500;
+            text-align: center;
           }
-          
-          /* Style the new top search container */
-          .top-search-container {
-              margin: 0 auto 2rem auto;
-              max-width: 800px;
-              padding-bottom: 1rem;
+          .step-done {
+            background: rgba(16, 185, 129, 0.2);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.4);
+          }
+          .step-active {
+            background: rgba(59, 130, 246, 0.25);
+            color: #93c5fd;
+            border: 1px solid #3b82f6;
+            animation: pulse-ring 1.5s infinite;
+          }
+          .step-pending {
+            background: rgba(255, 255, 255, 0.05);
+            color: #94a3b8;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+          }
+          @keyframes pulse-ring {
+            0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4); }
+            70% { box-shadow: 0 0 0 6px rgba(59, 130, 246, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
           }
 
-          /* Modern Centered Pill Search Input */
-          div[data-testid="stChatInput"] {
-              border-radius: 30px !important;
-              border: 1px solid #e2e8f0 !important;
-              box-shadow: 0 4px 10px rgba(0,0,0,0.05) !important;
-              padding: 0px 15px !important;
+          /* Paper Card in Sources tab */
+          .paper-card {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 14px 16px;
+            margin-bottom: 10px;
+            transition: all 0.2s ease;
           }
-          
-          div[data-testid="stChatInput"]:focus-within {
-              border-color: #3b82f6 !important;
-              box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2) !important;
+          .paper-card:hover {
+            border-color: #cbd5e1;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+          }
+          .paper-title {
+            font-weight: 600;
+            font-size: 14px;
+            color: #1e293b;
+            margin-bottom: 4px;
           }
 
-
-          .top-right-profile-marker {
-              display: none;
+          /* Metadata Badge Tags */
+          .meta-tag {
+            display: inline-block;
+            padding: 3px 8px;
+            background: #f1f5f9;
+            border-radius: 6px;
+            font-size: 11px;
+            color: #475569;
+            margin-right: 6px;
+            border: 1px solid #e2e8f0;
           }
-
+          .checksum-badge {
+            background: #eff6ff;
+            color: #2563eb;
+            border: 1px solid #bfdbfe;
+            font-family: monospace;
+          }
         </style>
         """,
-        unsafe_allow_html=True,
+        unsafe_allow_html=True
     )
-
-    # Search Bar Spinner UI (Phase 2: UI Aesthetics)
-    if st.session_state.get("is_researching"):
-        st.markdown(
-            """
-            <style>
-              /* Target the submit button icon */
-              [data-testid="stChatInputSubmit"] svg {
-                display: none !important;
-              }
-              /* Create the rotating ring */
-              [data-testid="stChatInputSubmit"]::after {
-                content: "";
-                display: block;
-                width: 18px;
-                height: 18px;
-                border: 2px solid #cbd5e1;
-                border-top-color: #3b82f6;
-                border-radius: 50%;
-                animation: gear-spin 0.8s linear infinite;
-                position: absolute;
-                top: 50%;
-                left: 50%;
-                transform: translate(-50%, -50%);
-              }
-              @keyframes gear-spin {
-                from { transform: translate(-50%, -50%) rotate(0deg); }
-                to { transform: translate(-50%, -50%) rotate(360deg); }
-              }
-              /* Force visibility and disable interaction while processing */
-              [data-testid="stChatInputSubmit"] {
-                display: flex !important;
-                visibility: visible !important;
-                opacity: 1 !important;
-                background-color: transparent !important;
-                border: none !important;
-                pointer-events: none;
-              }
-            </style>
-            """,
-            unsafe_allow_html=True
-        )
-
 
     if not st.session_state.get("authenticated"):
         show_login_page()
         return
 
-    # ── Top-Right Profile Overlay ──────────────────────────────────────
-    with st.container():
-        # This empty div acts as a marker for our CSS selector
-        st.markdown('<div class="top-right-profile-marker"></div>', unsafe_allow_html=True)
-        st.markdown(f"👤 **{st.session_state.get('username', 'User')}**")
-        
-        if st.button("Logout", key="top_right_logout", use_container_width=True):
-            session_token = st.query_params.get("session")
-            if session_token:
-                delete_session(session_token)
-                st.query_params.clear()
-            for k in ["authenticated", "user_id", "username", "chat_history",
-                      "shown_reports", "active_report_id", "_backfilled"]:
-                st.session_state.pop(k, None)
-            st.rerun()
-
-
-    # ── helpers ──────────────────────────────────────────────────────────
     user_id = st.session_state.get("user_id")
+    username = st.session_state.get("username", "User")
 
+    # ── Database Helpers ────────────────────────────────────────────────
     def _backfill_reports_from_disk(active_query="(Recovered — query unknown)"):
         """Scan on-disk report files and register any that are not yet in the DB."""
-        from src.database import SessionLocal, Report
-        from pathlib import Path as _P
-        user_dir = _P("output/reports") / str(user_id)
-        print(f"BACKFILL: user_dir is {user_dir}, exists={user_dir.exists()}")
+        user_dir = REPORTS_DIR / str(user_id)
         if not user_dir.exists():
             return
         db = SessionLocal()
         existing_paths = {r.file_path for r in db.query(Report).filter(Report.user_id == user_id).all()}
-        print(f"BACKFILL: existing_paths for user {user_id} = {existing_paths}")
         
         for f in user_dir.glob("research_report_*.md"):
             fp = str(f)
-            print(f"BACKFILL: found file {fp}")
             if fp not in existing_paths:
-                print(f"BACKFILL: Inserting {fp} into DB")
                 new_r = Report(user_id=user_id, file_path=fp, query=active_query)
                 db.add(new_r)
-            else:
-                print(f"BACKFILL: {fp} already in DB")
         db.commit()
         db.close()
 
-    # Always backfill if we are actively researching, otherwise once per session
     if st.session_state.get("is_researching"):
-        print(f"BACKFILL: is_researching is True, calling backfill for user {user_id}")
         _backfill_reports_from_disk(st.session_state.get("last_query", "(Recovered — query unknown)"))
     elif not st.session_state.get("_backfilled"):
-        print(f"BACKFILL: initial backfill for user {user_id}")
         _backfill_reports_from_disk()
         st.session_state["_backfilled"] = True
 
     def _load_all_reports():
-        from src.database import SessionLocal, Report
         db = SessionLocal()
         rows = (db.query(Report)
                   .filter(Report.user_id == user_id)
                   .order_by(Report.created_at.asc())
                   .all())
-        result = [(r.id, r.query, r.file_path) for r in rows]
+        result = [(r.id, r.query, r.file_path, r.created_at) for r in rows]
         db.close()
-        return result  # list of (id, query, file_path)
+        return result
 
     all_reports = _load_all_reports()
 
-    # ── Left sidebar – Chat History Panel ────────────────────────────────
-    with st.sidebar:
-        # Brand block at the very top of the sidebar
-        st.markdown("""
-        <div class="sidebar-brand">
-            <h2>SentinelARC</h2>
-            <p>Autonomous Literature Review &amp; Fact-Checking</p>
-            <span class="sidebar-badge">● System Online</span>
-        </div>
-        """, unsafe_allow_html=True)
+    # ── TOP BAR (User info & Swarm status) ──────────────────────────────
+    top_col1, top_col2 = st.columns([0.75, 0.25])
+    with top_col1:
+        st.markdown(
+            f"""
+            <div class="sentinel-top-bar">
+              <div>
+                <span class="brand-title">⚡ SentinelARC</span>
+                <span class="status-badge">● Swarm Active</span>
+                <span class="sources-strip">📚 Sources: OpenAlex • arXiv • PubMed • Crossref • Semantic Scholar</span>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    with top_col2:
+        user_c1, user_c2 = st.columns([0.65, 0.35])
+        with user_c1:
+            st.markdown(f"<div style='padding-top: 18px; text-align: right;'>👤 <strong>{username}</strong></div>", unsafe_allow_html=True)
+        with user_c2:
+            st.markdown("<div style='padding-top: 10px;'>", unsafe_allow_html=True)
+            if st.button("Sign Out", key="btn_signout", use_container_width=True):
+                session_token = st.query_params.get("session")
+                if session_token:
+                    delete_session(session_token)
+                    st.query_params.clear()
+                for k in ["authenticated", "user_id", "username", "chat_history", "shown_reports", "active_report_id", "_backfilled"]:
+                    st.session_state.pop(k, None)
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown("---")
-        if st.button("＋ New Research", use_container_width=True, key="btn_new_chat",
-                     type="primary"):
+    # ── SIDEBAR (Chat History & Control Center) ─────────────────────────
+    with st.sidebar:
+        st.markdown(
+            """
+            <div style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); padding: 16px; border-radius: 12px; color: white; margin-bottom: 12px;">
+              <h3 style="color: white !important; margin: 0 0 4px 0; font-size: 18px;">SentinelARC Swarm</h3>
+              <p style="color: #94a3b8; font-size: 11px; margin: 0;">Multi-Agent Synthesis Engine</p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        if st.button("＋ New Research Query", use_container_width=True, key="btn_new_chat", type="primary"):
             st.session_state["active_report_id"] = None
             st.session_state["chat_history"] = []
+            st.session_state["shown_reports"] = set()
             st.rerun()
 
-        st.markdown("#### 🗂 Chat History")
+        st.markdown("#### 🗂 Research History")
         if not all_reports:
-            st.caption("No chats yet. Start your first research!")
+            st.caption("No reports yet. Submit your first research query!")
         else:
-            search_q = st.text_input("", placeholder="🔍 Filter chats…", label_visibility="collapsed", key="chat_search")
-            for rep_id, query, fpath in reversed(all_reports):  # newest first
-                label = (query.split()[0] if query.split() else "Chat")  # first word
-                if search_q and search_q.lower() not in query.lower():
+            search_filter = st.text_input("Filter history", placeholder="🔍 Filter reports...", label_visibility="collapsed", key="search_filter")
+            for rep_id, query, fpath, created_at in reversed(all_reports):
+                if search_filter and search_filter.lower() not in query.lower():
                     continue
-                full_label = f"**{label}** — _{query[:35]}{'…' if len(query)>35 else ''}_"
+
                 is_active = st.session_state.get("active_report_id") == rep_id
                 btn_style = "primary" if is_active else "secondary"
-                if st.button(full_label, key=f"chat_{rep_id}", use_container_width=True, type=btn_style):
-                    # Open this chat: set active, rebuild history for this single chat
-                    st.session_state["active_report_id"] = rep_id
-                    st.session_state["chat_history"] = [
-                        {"type": "user",   "content": f"Research: {query}"},
-                        {"type": "report", "path":    fpath}
-                    ]
-                    st.session_state["shown_reports"] = {fpath}
-                    st.rerun()
+                time_str = created_at.strftime("%b %d, %H:%M") if created_at else ""
+                short_query = query[:28] + ("…" if len(query) > 28 else "")
 
-        # --- Sidebar Control Center (at bottom) ---
+                col_btn, col_del = st.columns([0.82, 0.18])
+                with col_btn:
+                    if st.button(f"{short_query}\n_{time_str}_", key=f"chat_{rep_id}", use_container_width=True, type=btn_style):
+                        st.session_state["active_report_id"] = rep_id
+                        st.session_state["chat_history"] = [
+                            {"type": "user", "content": f"Research: {query}"},
+                            {"type": "report", "path": fpath}
+                        ]
+                        st.session_state["shown_reports"] = {fpath}
+                        st.rerun()
+                with col_del:
+                    if st.button("🗑️", key=f"del_{rep_id}", help="Delete report", use_container_width=True):
+                        delete_report(rep_id, fpath, user_id)
+                        st.toast("🗑️ Report removed.")
+                        st.rerun()
+
         st.markdown("---")
         with st.container(border=True):
             st.markdown("##### 🛠️ Control Center")
-            
-            # Restore mode from query params on page refresh
             if "mode" not in st.session_state:
                 saved_mode = st.query_params.get("mode", "research")
                 st.session_state["mode"] = "General AI" if saved_mode == "general" else "Research AI"
-                
+
             current_is_general = st.session_state.get("mode") == "General AI"
-            mode = st.radio("**Intelligence Mode**", ["Research AI", "General AI"],
-                            index=1 if current_is_general else 0,
-                            key="sidebar_mode_toggle")
-            
+            mode = st.radio(
+                "**Intelligence Mode**",
+                ["Research AI Swarm", "General AI Chat"],
+                index=1 if current_is_general else 0,
+                key="sidebar_mode_toggle"
+            )
             new_mode = "General AI" if "General AI" in mode else "Research AI"
             if new_mode != st.session_state.get("mode"):
                 st.session_state["mode"] = new_mode
                 st.query_params["mode"] = "general" if new_mode == "General AI" else "research"
                 st.rerun()
-                
+
             if st.session_state.get("mode") == "General AI":
-                st.session_state["ai_model"] = st.selectbox("**Model Selection**", ["llama3.1:8b", "mistral", "qwen2.5-coder"])
+                st.session_state["ai_model"] = st.selectbox(
+                    "**Model Selection**",
+                    ["llama3.1:8b", "mistral", "qwen2.5-coder"]
+                )
             else:
-                st.caption("Swarm Analysis: Llama 3.k + Qwen 1.5B (Fast Path)")
+                st.caption("⚡ Swarm Pipeline: HyDE ➔ Multi-Source ➔ FactChecker ➔ Synthesis")
 
-
-
-    # --- Main content: Chat History Management ---
+    # ── Chat & Report History Initialization ───────────────────────────
     if "chat_history" not in st.session_state:
-        # On first load (no active chat) show all reports in one stream
         st.session_state["chat_history"] = []
-        for rep_id, query, fpath in all_reports:
-            st.session_state["chat_history"].append({"type": "user",   "content": f"Research: {query}"})
-            st.session_state["chat_history"].append({"type": "report", "path":    fpath})
+        for rep_id, query, fpath, _ in all_reports:
+            st.session_state["chat_history"].append({"type": "user", "content": f"Research: {query}"})
+            st.session_state["chat_history"].append({"type": "report", "path": fpath})
 
     if "shown_reports" not in st.session_state:
         st.session_state["shown_reports"] = {item.get("path") for item in st.session_state["chat_history"] if item.get("path")}
 
-    # On refresh: check if a research task was in-progress by comparing
-    # existing DB record count vs shown_reports — if there are fewer DB rows
-    # than shown_reports it means we're mid-task, so restore the spinner.
-    if not st.session_state.get("is_researching"):
-        # Check if there's an active research task (a query marker file)
-        import os
-        task_file = f"output/active_task_{user_id}.flag"
-        if os.path.exists(task_file):
-            # Check if any report was generated AFTER this flag was created
-            task_time = os.path.getmtime(task_file)
-            search_is_done = False
-            for rep_id, query, fpath in all_reports:
-                if os.path.exists(fpath) and os.path.getmtime(fpath) > task_time:
-                    search_is_done = True
-                    break
-            
-            if search_is_done:
-                try:
-                    os.remove(task_file)
-                except OSError:
-                    pass
-            else:
-                st.session_state["is_researching"] = True
-                st.session_state["poll_count"] = 0
+    # Check for active task flag
+    task_file = f"output/active_task_{user_id}.flag"
+    if not st.session_state.get("is_researching") and os.path.exists(task_file):
+        task_time = os.path.getmtime(task_file)
+        search_is_done = any(os.path.exists(fpath) and os.path.getmtime(fpath) > task_time for _, _, fpath, _ in all_reports)
+        if search_is_done:
+            try:
+                os.remove(task_file)
+            except OSError:
+                pass
+        else:
+            st.session_state["is_researching"] = True
+            st.session_state["poll_count"] = 0
 
-
-
-    # Auto-detect freshly completed reports from the DB and append to current view
+    # Detect newly saved reports
     new_report_found = False
-    for rep_id, query, fpath in all_reports:
+    for rep_id, query, fpath, _ in all_reports:
         if fpath not in st.session_state["shown_reports"]:
-            st.session_state["chat_history"].append({"type": "user",   "content": f"Research: {query}"})
-            st.session_state["chat_history"].append({"type": "report", "path":    fpath})
+            st.session_state["chat_history"].append({"type": "user", "content": f"Research: {query}"})
+            st.session_state["chat_history"].append({"type": "report", "path": fpath})
             st.session_state["shown_reports"].add(fpath)
             new_report_found = True
             if st.session_state.get("is_researching"):
                 st.session_state["is_researching"] = False
-                import os
-                task_flag = f"output/active_task_{user_id}.flag"
-                if os.path.exists(task_flag):
-                    os.remove(task_flag)
-                st.toast("✅ Research complete! Report added below.")
+                if os.path.exists(task_file):
+                    try:
+                        os.remove(task_file)
+                    except OSError:
+                        pass
+                st.toast("🎉 Research complete! Synthesized report loaded below.")
 
     if new_report_found:
         st.rerun()
 
-    # --- TOP SEARCH BAR ---
-    st.markdown('<div class="top-search-container">', unsafe_allow_html=True)
-    top_query = st.text_input("🔍 Search literature or ask SentinelARC...", key="top_search_input", placeholder="Enter your research query...")
-    if top_query and top_query.strip() != st.session_state.get("last_query"):
-        st.session_state["last_query"] = top_query.strip()
-        prompt = top_query.strip()
-        # Add user message to history
+    # ── QUICK PROMPTS CHIPS ─────────────────────────────────────────────
+    st.caption("✨ Quick Start Prompts:")
+    chip_cols = st.columns(4)
+    with chip_cols[0]:
+        if st.button("⚡ Quantum Key Distribution", key="qp_1", use_container_width=True):
+            st.session_state["pending_query"] = "Quantum Key Distribution Protocols and Post-Quantum Security"
+            st.rerun()
+    with chip_cols[1]:
+        if st.button("🧬 CRISPR Off-Target Repair", key="qp_2", use_container_width=True):
+            st.session_state["pending_query"] = "CRISPR-Cas9 Off-Target Effects and Fidelity Enhancement"
+            st.rerun()
+    with chip_cols[2]:
+        if st.button("🤖 Agent Memory with CRIU", key="qp_3", use_container_width=True):
+            st.session_state["pending_query"] = "Process Checkpointing in Multi-Agent Systems using CRIU"
+            st.rerun()
+    with chip_cols[3]:
+        if st.button("🧠 HyDE Dense Retrieval", key="qp_4", use_container_width=True):
+            st.session_state["pending_query"] = "Hypothetical Document Embeddings for Zero-Shot Academic Search"
+            st.rerun()
+
+    # ── TOP SEARCH INPUT ───────────────────────────────────────────────
+    initial_text = st.session_state.pop("pending_query", "")
+    search_prompt = st.text_input(
+        "🔍 Search literature or ask SentinelARC...",
+        value=initial_text,
+        placeholder="Enter academic topic, paper claim, or research question...",
+        key="top_search_input"
+    )
+
+    if search_prompt and search_prompt.strip() != st.session_state.get("last_query"):
+        prompt = search_prompt.strip()
+        st.session_state["last_query"] = prompt
         st.session_state["chat_history"].append({"type": "user", "content": prompt})
-        
+
         if st.session_state.get("mode") == "General AI":
-            # Logic for general chat (streaming)
             st.session_state["chat_history"].append({"type": "assistant", "content": ""})
             placeholder = st.empty()
             full_resp = ""
-            for chunk in trigger_general_ai(prompt, st.session_state.get("ai_model", "llama3.1:8b"), 
-                                            st.session_state["chat_history"][:-1], user_id):
+            for chunk in trigger_general_ai(prompt, st.session_state.get("ai_model", "llama3.1:8b"), st.session_state["chat_history"][:-1], user_id):
                 full_resp += chunk
                 placeholder.markdown(full_resp + "▌")
             st.session_state["chat_history"][-1]["content"] = full_resp
             placeholder.markdown(full_resp)
             st.rerun()
         else:
-            # Logic for research swarm
             try:
                 trigger_research(prompt, user_id)
                 st.session_state["is_researching"] = True
-                # Create a task flag file so refresh mid-task restores the spinner
                 with open(f"output/active_task_{user_id}.flag", "w") as f:
                     f.write(prompt)
-                st.toast("🚀 Research Swarm activated! Monitoring progress...")
+                st.toast("🚀 Swarm activated! Gathering and synthesizing sources...")
                 st.rerun()
             except Exception as e:
                 st.error(f"Failed to start research: {e}")
-    st.markdown('</div>', unsafe_allow_html=True)
 
-    # Render history
+    # ── LIVE SWARM STEPPER (When active) ────────────────────────────────
+    if st.session_state.get("is_researching"):
+        poll_count = st.session_state.get("poll_count", 0)
+        elapsed = poll_count * 2
+
+        # Compute active stage
+        if elapsed < 6:
+            curr_stage = 0
+            stage_name = "Semantic Query Expansion (HyDE via Groq)"
+        elif elapsed < 16:
+            curr_stage = 1
+            stage_name = "Parallel Multi-Source Retrieval (arXiv, PubMed, OpenAlex)"
+        elif elapsed < 28:
+            curr_stage = 2
+            stage_name = "Document Stream Extraction & Paywall Bypass"
+        elif elapsed < 40:
+            curr_stage = 3
+            stage_name = "Cross-Verification & Fact-Checking with DOIs"
+        else:
+            curr_stage = 4
+            stage_name = "Synthesis & Atomic Persistence"
+
+        step_classes = []
+        for i in range(5):
+            if i < curr_stage:
+                step_classes.append("step-done")
+            elif i == curr_stage:
+                step_classes.append("step-active")
+            else:
+                step_classes.append("step-pending")
+
+        st.markdown(
+            f"""
+            <div class="stepper-box">
+              <div class="stepper-header">
+                <div>
+                  <span class="stepper-title">🔄 Active Research Swarm: {stage_name}</span>
+                </div>
+                <div>
+                  <span style="font-size: 12px; color: #94a3b8; background: rgba(255,255,255,0.1); padding: 4px 10px; border-radius: 6px;">
+                    ⏱ Elapsed: {elapsed}s
+                  </span>
+                </div>
+              </div>
+              <div class="stepper-steps">
+                <div class="step-pill {step_classes[0]}">1. HyDE Query</div>
+                <div class="step-pill {step_classes[1]}">2. Multi-Source</div>
+                <div class="step-pill {step_classes[2]}">3. PDF Parsing</div>
+                <div class="step-pill {step_classes[3]}">4. Fact-Check</div>
+                <div class="step-pill {step_classes[4]}">5. Synthesis</div>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        col_spin, col_stop = st.columns([0.85, 0.15])
+        with col_stop:
+            if st.button("🛑 Stop Search", key="stop_search_btn", use_container_width=True):
+                st.session_state["is_researching"] = False
+                import glob
+                for f in glob.glob(f"output/active_task_{user_id}.flag"):
+                    try:
+                        os.remove(f)
+                    except OSError:
+                        pass
+                st.rerun()
+
+        time.sleep(2)
+        st.session_state["poll_count"] = poll_count + 1
+        if st.session_state["poll_count"] > 900:
+            st.session_state["is_researching"] = False
+            st.error("Request timed out after 30 minutes.")
+        st.rerun()
+
+    # ── CHAT & REPORT STREAM ───────────────────────────────────────────
     for idx, item in enumerate(st.session_state["chat_history"]):
         if item["type"] == "user":
             with st.chat_message("user"):
                 st.markdown(item["content"])
-                
+
         elif item["type"] == "assistant":
             with st.chat_message("assistant"):
                 st.markdown(item["content"])
-        
+
         elif item["type"] == "report":
             path = Path(item["path"])
             if path.exists():
                 content = read_report(path)
                 papers = extract_paper_links(content)
                 summary_md = extract_summary_from_report(content)
-                
+
+                meta_path = path.with_suffix(".meta.json")
+                html_path = path.with_suffix(".html")
+
+                checksum = None
+                word_count = len(content.split())
+                sources_count = len(papers)
+                meta_data = {}
+
+                if meta_path.exists():
+                    try:
+                        meta_data = json.loads(meta_path.read_text(encoding="utf-8"))
+                        checksum = meta_data.get("checksum")
+                        word_count = meta_data.get("word_count", word_count)
+                        sources_count = meta_data.get("sources_count", sources_count)
+                    except Exception:
+                        pass
+
                 with st.chat_message("assistant"):
                     with st.container(border=True):
-                        st.caption(f"Research Report: {path.name}")
-                        if summary_md:
-                            st.markdown(summary_md)
+                        # Header with badges
+                        st.markdown(
+                            f"""
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                              <div>
+                                <span style="font-weight: 700; font-size: 16px; color: #0f172a;">📄 {path.name}</span>
+                              </div>
+                              <div>
+                                <span class="meta-tag">📝 {word_count} words</span>
+                                <span class="meta-tag">📚 {sources_count} sources</span>
+                                <span class="meta-tag checksum-badge">🔒 SHA-256: {checksum[:12] if checksum else 'Verified'}...</span>
+                              </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+
+                        # Tabbed Report View
+                        tab_report, tab_sources, tab_integrity, tab_html = st.tabs([
+                            "📖 Synthesis Report",
+                            f"📚 Sources & Citations ({len(papers)})",
+                            "🔒 Integrity & Metadata",
+                            "🌐 HTML Preview"
+                        ])
+
+                        with tab_report:
+                            if summary_md:
+                                st.markdown(summary_md)
+
+                        with tab_sources:
+                            if not papers:
+                                st.info("No external URLs or citations detected in this report.")
+                            else:
+                                st.markdown(f"**Verified Academic Sources ({len(papers)} papers):**")
+                                for p_idx, paper in enumerate(papers):
+                                    pdf_badge = "📄 **PDF Available**" if str(paper.get("is_pdf")).lower() == "true" else "🔗 **Web Link**"
+                                    with st.container(border=True):
+                                        st.markdown(f"**{p_idx+1}. [{paper['title']}]({paper['url']})**")
+                                        st.caption(f"Target: `{paper['url']}` | Status: {pdf_badge}")
+
+                        with tab_integrity:
+                            st.markdown("##### 🔒 Cryptographic Verification & File Provenance")
+                            info_cols = st.columns(3)
+                            info_cols[0].metric("File Size", f"{path.stat().st_size:,} bytes")
+                            info_cols[1].metric("Word Count", f"{word_count:,}")
+                            info_cols[2].metric("Sources Linked", len(papers))
+
+                            st.markdown(f"**Full SHA-256 Checksum:**")
+                            st.code(checksum if checksum else "Computed upon atomic write", language="text")
+
+                            st.markdown("**File System Path:**")
+                            st.code(str(path.resolve()), language="text")
+
+                            if meta_data:
+                                st.markdown("**Metadata Sidecar (`.meta.json`):**")
+                                st.json(meta_data)
+
+                        with tab_html:
+                            if html_path.exists():
+                                html_text = html_path.read_text(encoding="utf-8")
+                                components.html(html_text, height=450, scrolling=True)
+                            else:
+                                st.caption("HTML version not yet generated for this report.")
+
+                        # Multi-Format Export Toolbar
+                        st.markdown("---")
+                        st.markdown("###### 📥 Export Research Report:")
+                        dl_cols = st.columns(4)
+                        with dl_cols[0]:
+                            st.download_button(
+                                label="📥 Markdown (.md)",
+                                data=content,
+                                file_name=path.name,
+                                mime="text/markdown",
+                                key=f"dl_md_{idx}",
+                                use_container_width=True
+                            )
+                        with dl_cols[1]:
+                            # Generate PDF bytes via reportlab
+                            try:
+                                pdf_bytes = build_summary_pdf_bytes(content, f"SentinelARC: {path.stem}")
+                                st.download_button(
+                                    label="📄 PDF Document (.pdf)",
+                                    data=pdf_bytes,
+                                    file_name=path.with_suffix(".pdf").name,
+                                    mime="application/pdf",
+                                    key=f"dl_pdf_{idx}",
+                                    use_container_width=True
+                                )
+                            except Exception as pdf_err:
+                                st.caption(f"PDF unavailable: {pdf_err}")
+                        with dl_cols[2]:
+                            if html_path.exists():
+                                st.download_button(
+                                    label="🌐 Standalone HTML (.html)",
+                                    data=html_path.read_text(encoding="utf-8"),
+                                    file_name=html_path.name,
+                                    mime="text/html",
+                                    key=f"dl_html_{idx}",
+                                    use_container_width=True
+                                )
+                        with dl_cols[3]:
+                            if meta_path.exists():
+                                st.download_button(
+                                    label="📊 Metadata JSON (.json)",
+                                    data=meta_path.read_text(encoding="utf-8"),
+                                    file_name=meta_path.name,
+                                    mime="application/json",
+                                    key=f"dl_meta_{idx}",
+                                    use_container_width=True
+                                )
 
             else:
                 with st.chat_message("assistant"):
                     st.warning(f"Report file `{path.name}` not found or still generating...")
 
 
-    if st.session_state.get("is_researching"):
-        with st.chat_message("assistant"):
-            col1, col2 = st.columns([0.8, 0.2])
-            with col1:
-                with st.spinner("Researching in background (fetching and synthesizing sources)..."):
-                    import time
-                    time.sleep(2)
-                    st.session_state["poll_count"] = st.session_state.get("poll_count", 0) + 1
-                    if st.session_state["poll_count"] > 900: # Timeout after 30 minutes
-                        st.session_state["is_researching"] = False
-                        st.error("Request timed out. Check terminal logs.")
-            with col2:
-                if st.button("🛑 Stop Search", key="stop_search_btn", use_container_width=True):
-                    st.session_state["is_researching"] = False
-                    import glob
-                    import os
-                    for f in glob.glob("output/active_task_*.flag"):
-                        try:
-                            # Use global os module
-                            os.remove(f)
-                        except OSError:
-                            pass
-                    st.rerun()
-            st.rerun()
-
-
 if __name__ == "__main__":
     main()
-

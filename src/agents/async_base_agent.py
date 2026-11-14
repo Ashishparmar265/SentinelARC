@@ -14,7 +14,22 @@ import aiohttp
 from urllib.parse import urljoin
 
 # Prometheus monitoring
-from prometheus_client import Counter, start_http_server, generate_latest, CONTENT_TYPE_LATEST
+try:
+    from prometheus_client import Counter, start_http_server, generate_latest, CONTENT_TYPE_LATEST
+    HAS_PROMETHEUS = True
+except ImportError:
+    HAS_PROMETHEUS = False
+    class DummyMetric:
+        def labels(self, *args, **kwargs):
+            return self
+        def inc(self, *args, **kwargs):
+            pass
+    def Counter(*args, **kwargs):
+        return DummyMetric()
+    start_http_server = None
+    def generate_latest():
+        return b"# HELP metrics not available\n"
+    CONTENT_TYPE_LATEST = "text/plain"
 from fastapi import FastAPI, Response
 
 from ..message_bus.rabbitmq_bus import RabbitMQBus
