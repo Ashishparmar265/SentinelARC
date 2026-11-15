@@ -5,45 +5,54 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
-  build-and-test:
+  lint-and-test:
+    name: Lint & Syntax Verification
     runs-on: ubuntu-latest
     
     steps:
     - name: Checkout Code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
+        pip install flake8 pytest
         pip install -r docker/requirements-streamlit.txt
         pip install -r docker/requirements-agents.txt
 
     - name: Syntax Check & Linting
       run: |
-        pip install flake8
-        # Stop the build if there are Python syntax errors or undefined names
-        flake8 src/ streamlit_app.py --count --select=E9,F63,F7,F82 --show-source --statistics
-        
-    - name: Test Docker Compose Build
-      run: |
-        docker compose -f docker-compose.optimized.yml build
+        flake8 src/ streamlit_app.py async_main.py --count --select=E9,F63,F7,F82 --show-source --statistics
 
-  deploy:
-    needs: build-and-test
+  deploy-to-oracle-cloud:
+    name: Continuous Deployment to Oracle Cloud
+    needs: lint-and-test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     
     steps:
-    - name: Deploy to Cloud (Render/Streamlit Community)
-      run: |
-        echo "Successfully built and tested the main branch."
-        echo "In a production environment, this step would trigger a webhook to Render,"
-        echo "or push the Docker images to a container registry like Docker Hub/GHCR."
-        echo "Streamlit Community Cloud automatically redeploys when the main branch is updated."
+    - name: Deploy to OCI Virtual Machine via SSH
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.OCI_HOST }}
+        username: ${{ secrets.OCI_USERNAME }}
+        key: ${{ secrets.OCI_SSH_KEY }}
+        port: 22
+        script_stop: true
+        script: |
+          cd /home/opc/SentinelARC
+          echo "📥 Pulling latest updates from GitHub..."
+          git fetch origin main
+          git reset --hard origin/main
+          echo "🔄 Restarting containers..."
+          sudo docker compose -f docker-compose.optimized.yml up -d --build
+          sudo docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+          echo "✅ SentinelARC deployment completed!"
