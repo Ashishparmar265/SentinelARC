@@ -49,10 +49,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libbsd-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js 20 (for npx and Playwright)
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
-    && npm install -g npm@latest
+# Install Node.js 22 (for npx and Playwright)
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs
 
 # Install Playwright globally and download Chromium (during build)
 RUN npm install -g playwright \
