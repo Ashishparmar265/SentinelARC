@@ -4205,3 +4205,120 @@ Whenever you make future code edits:
    * Runs `git pull origin main && sudo docker compose -f docker-compose.optimized.yml up -d --build`.
    * Your live website updates in under 60 seconds with zero manual intervention!
 
+
+---
+
+### User
+
+so our current link is looking like "http://168.138.114.117:8501/" can we make it full text with it name
+
+---
+
+### Assistant
+
+**Yes, absolutely!** You can replace `http://168.138.114.117:8501/` with a real, clean domain name (like **`https://sentinel-arc.duckdns.org/`** or your own custom domain like **`https://sentinelarc.com/`**) and remove the `:8501` port entirely.
+
+---
+
+### What Makes This Happen (2 Simple Pieces)
+
+1. **A Domain / DNS Name:** 
+   Translates a human-friendly name into your Oracle Cloud VM's IP (`168.138.114.117`).
+2. **A Reverse Proxy (Nginx or Caddy) with SSL:**
+   Right now, Streamlit listens on port `8501`. A standard web browser looks for port `80` (HTTP) or `443` (HTTPS). 
+   A reverse proxy sits on port `80/443`, automatically provides a **green HTTPS padlock** via Let's Encrypt, and silently forwards requests internally to Streamlit (`localhost:8501`). Users never have to type `:8501`.
+
+---
+
+### Options to Choose From:
+
+#### Option 1: 100% Free Subdomain via DuckDNS (Recommended — Takes 2 Minutes)
+* **What you get:** `https://sentinel-arc.duckdns.org` (or any name you choose).
+* **Cost:** **$0.00 / 100% Free forever** (no credit card needed).
+* **How it works:**
+  1. Go to [duckdns.org](https://www.duckdns.org/) and log in with your GitHub account.
+  2. In the "sub domain" box, type your chosen name (e.g., `sentinel-arc`).
+  3. In the "current ip" box, enter your Oracle VM IP: `168.138.114.117`.
+  4. Click **"add domain"**.
+
+---
+
+#### Option 2: Use Your Own Custom Domain (e.g., `.com`, `.in`, `.dev`)
+* **What you get:** `https://sentinelarc.yourname.com` or `https://sentinelarc.com`.
+* **Cost:** Requires a domain purchased from Namecheap, GoDaddy, Hostinger, etc. (~$5–$10/yr).
+* **How it works:**
+  1. Open your domain's DNS manager.
+  2. Add an **A Record**:
+     - **Host / Name:** `@` (or `sentinelarc`)
+     - **Points to (Value):** `168.138.114.117`
+     - **TTL:** Automatic or 300 seconds.
+
+---
+
+### What I Will Set Up On the Server Once You Have the Name:
+
+Once you have chosen your domain name (e.g., `sentinel-arc.duckdns.org`), tell me the name and I will configure it on your Oracle VM:
+
+1. **Caddy / Nginx Reverse Proxy:** Route incoming public traffic on ports `80` (HTTP) and `443` (HTTPS) directly to your Streamlit container (`localhost:8501`).
+2. **Automatic Free SSL Certificate:** Caddy automatically provisions and auto-renews free Let's Encrypt SSL certificates, giving your link a secure `https://` padlock.
+3. **Oracle Cloud Ingress:** We will ensure ports `80` and `443` are allowed in your Oracle VCN Security List (just like we did for port `8501`).
+
+---
+
+### User
+
+*(User uploaded screenshot of DuckDNS domain creation `sentinel-arc.duckdns.org` -> `168.138.114.117`, and screenshot of Sophos firewall error page "Website not available" upon accessing `http://sentinel-arc.duckdns.org`)*
+
+---
+
+### Assistant
+
+### Why You Saw the Sophos "Website Not Available" Page
+
+In your screenshot, the browser attempted to load `http://sentinel-arc.duckdns.org` on standard web port **80**. 
+
+At that moment:
+1. Streamlit was listening exclusively on port `8501` (`http://168.138.114.117:8501`).
+2. There was no reverse proxy or web server running on port `80` or `443`.
+3. Because the VM refused the port 80 connection, your local campus network gateway (**Sophos**) intercepted the connection refusal and displayed its default *"Website not available"* page.
+
+---
+
+### What I Did Behind the Scenes:
+
+1. **Configured Caddy Reverse Proxy:**
+   - Created a [`Caddyfile`](file:///home/iiitl/SentinelARC/Caddyfile) configured to proxy incoming requests to the internal Streamlit dashboard (`synapse-streamlit:8501`).
+   - Attached Caddy to the `sentinelarc_synapse-network` Docker bridge network, binding to ports `80` (HTTP) and `443` (HTTPS).
+2. **Obtained an Official Let's Encrypt SSL Certificate:**
+   - Caddy automatically communicated with Let's Encrypt over ACME (`http-01` challenge) for `sentinel-arc.duckdns.org`.
+   - The challenge was validated and an **official, trusted TLS/SSL certificate** was issued.
+3. **Enabled Automatic HTTP → HTTPS Redirection:**
+   - Anyone visiting `http://sentinel-arc.duckdns.org` is automatically redirected with an `HTTP 308 Permanent Redirect` to `https://sentinel-arc.duckdns.org/`.
+4. **Persisted into Git & Compose:**
+   - Added the `caddy` service and persistent SSL certificate volumes to [`docker-compose.optimized.yml`](file:///home/iiitl/SentinelARC/docker-compose.optimized.yml).
+   - Committed and pushed to GitHub `main` (commit [`c8f8b54`](https://github.com/Ashishparmar265/SentinelARC/commit/c8f8b54)) and pulled onto your Oracle VM.
+
+---
+
+### Verified Live Endpoints
+
+Both HTTP redirection and HTTPS delivery have been verified:
+
+```bash
+# 1. Automatic HTTP -> HTTPS redirect
+curl -I http://sentinel-arc.duckdns.org
+# HTTP/1.1 308 Permanent Redirect -> Location: https://sentinel-arc.duckdns.org/
+
+# 2. Secure HTTPS connection with SSL
+curl -I https://sentinel-arc.duckdns.org
+# HTTP/2 200 OK (via Caddy -> Streamlit)
+```
+
+---
+
+### How to Access Your Application Now:
+
+Open your new clean URL:
+👉 **[https://sentinel-arc.duckdns.org/](https://sentinel-arc.duckdns.org/)**
+
+*(Tip: Because your browser and Sophos firewall briefly cached the previous error page, open it in an **Incognito / Private Window** or press `Ctrl + F5` to bypass the local cache and see your live dashboard with the verified security padlock!)*
