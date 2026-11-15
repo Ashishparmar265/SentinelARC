@@ -163,6 +163,23 @@ services:
     depends_on:
       - prometheus
 
+  caddy:
+    image: caddy:latest
+    container_name: synapse-caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - synapse-streamlit
+    networks:
+      - synapse-network
+
 networks:
   synapse-network:
     driver: bridge
@@ -171,3 +188,5 @@ volumes:
   rabbitmq_data:
   prometheus_data:
   grafana_data:
+  caddy_data:
+  caddy_config:

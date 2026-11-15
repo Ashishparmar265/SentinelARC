@@ -1,0 +1,3 @@
+sentinel-arc.duckdns.org {
+    reverse_proxy synapse-streamlit:8501
+}
