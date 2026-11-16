@@ -80,13 +80,22 @@ def show_login_page():
                         user = db.query(User).filter(User.username == username).first()
                         db.close()
                         if user and user.verify_password(password):
+                            # Completely clear previous user's session state to prevent cross-account data leaks
+                            for k in list(st.session_state.keys()):
+                                del st.session_state[k]
+                                
                             st.session_state["authenticated"] = True
                             st.session_state["user_id"] = user.id
                             st.session_state["username"] = user.username
+                            st.session_state["_authenticated_user_id"] = user.id
+                            st.session_state["chat_history"] = []
+                            st.session_state["shown_reports"] = set()
                             
                             if remember_me:
                                 token = create_session(user.id)
                                 st.query_params["session"] = token
+                            else:
+                                st.query_params.clear()
                                 
                             st.toast("👋 Welcome back to SentinelARC!")
                             st.rerun()
@@ -329,9 +338,18 @@ def main():
         if session_token:
             user_info = verify_session(session_token)
             if user_info:
+                # Wipe any residual session state
+                for k in list(st.session_state.keys()):
+                    del st.session_state[k]
                 st.session_state["authenticated"] = True
                 st.session_state["user_id"] = user_info["id"]
                 st.session_state["username"] = user_info["username"]
+                st.session_state["_authenticated_user_id"] = user_info["id"]
+                st.session_state["chat_history"] = []
+                st.session_state["shown_reports"] = set()
+            else:
+                # Invalidate stale token from query params
+                st.query_params.clear()
 
     # Modern SaaS CSS Design
     st.markdown(
@@ -511,6 +529,19 @@ def main():
     user_id = st.session_state.get("user_id")
     username = st.session_state.get("username", "User")
 
+    # ── Multi-Tenant Session Isolation Guard ────────────────────────────
+    # If the active user has changed or was never initialized in this session,
+    # strictly purge all previous user-specific state to prevent cross-account leaks!
+    if st.session_state.get("_authenticated_user_id") != user_id:
+        st.session_state["_authenticated_user_id"] = user_id
+        st.session_state["chat_history"] = []
+        st.session_state["shown_reports"] = set()
+        st.session_state["active_report_id"] = None
+        st.session_state["last_query"] = None
+        st.session_state["_backfilled"] = False
+        st.session_state["is_researching"] = False
+        st.session_state["poll_count"] = 0
+
     # ── Database Helpers ────────────────────────────────────────────────
     def _backfill_reports_from_disk(active_query="(Recovered — query unknown)"):
         """Scan on-disk report files and register any that are not yet in the DB."""
@@ -571,9 +602,10 @@ def main():
                 session_token = st.query_params.get("session")
                 if session_token:
                     delete_session(session_token)
-                    st.query_params.clear()
-                for k in ["authenticated", "user_id", "username", "chat_history", "shown_reports", "active_report_id", "_backfilled"]:
-                    st.session_state.pop(k, None)
+                st.query_params.clear()
+                # Completely wipe all session state to prevent state leaking to next user
+                for k in list(st.session_state.keys()):
+                    del st.session_state[k]
                 st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
 
@@ -654,11 +686,14 @@ def main():
                 st.caption("⚡ Swarm Pipeline: HyDE ➔ Multi-Source ➔ FactChecker ➔ Synthesis")
 
     # ── Chat & Report History Initialization ───────────────────────────
-    if "chat_history" not in st.session_state:
+    if not st.session_state.get("chat_history") and all_reports:
         st.session_state["chat_history"] = []
         for rep_id, query, fpath, _ in all_reports:
             st.session_state["chat_history"].append({"type": "user", "content": f"Research: {query}"})
             st.session_state["chat_history"].append({"type": "report", "path": fpath})
+
+    if "chat_history" not in st.session_state:
+        st.session_state["chat_history"] = []
 
     if "shown_reports" not in st.session_state:
         st.session_state["shown_reports"] = {item.get("path") for item in st.session_state["chat_history"] if item.get("path")}
