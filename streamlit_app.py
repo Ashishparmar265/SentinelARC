@@ -896,11 +896,9 @@ def main():
                         )
 
                         # Tabbed Report View
-                        tab_report, tab_sources, tab_integrity, tab_html = st.tabs([
+                        tab_report, tab_sources = st.tabs([
                             "📖 Synthesis Report",
-                            f"📚 Sources & Citations ({len(papers)})",
-                            "🔒 Integrity & Metadata",
-                            "🌐 HTML Preview"
+                            f"📚 Sources & Citations ({len(papers)})"
                         ])
 
                         with tab_report:
@@ -917,30 +915,6 @@ def main():
                                     with st.container(border=True):
                                         st.markdown(f"**{p_idx+1}. [{paper['title']}]({paper['url']})**")
                                         st.caption(f"Target: `{paper['url']}` | Status: {pdf_badge}")
-
-                        with tab_integrity:
-                            st.markdown("##### 🔒 Cryptographic Verification & File Provenance")
-                            info_cols = st.columns(3)
-                            info_cols[0].metric("File Size", f"{path.stat().st_size:,} bytes")
-                            info_cols[1].metric("Word Count", f"{word_count:,}")
-                            info_cols[2].metric("Sources Linked", len(papers))
-
-                            st.markdown(f"**Full SHA-256 Checksum:**")
-                            st.code(checksum if checksum else "Computed upon atomic write", language="text")
-
-                            st.markdown("**File System Path:**")
-                            st.code(str(path.resolve()), language="text")
-
-                            if meta_data:
-                                st.markdown("**Metadata Sidecar (`.meta.json`):**")
-                                st.json(meta_data)
-
-                        with tab_html:
-                            if html_path.exists():
-                                html_text = html_path.read_text(encoding="utf-8")
-                                components.html(html_text, height=450, scrolling=True)
-                            else:
-                                st.caption("HTML version not yet generated for this report.")
 
                         # Multi-Format Export Toolbar
                         st.markdown("---")

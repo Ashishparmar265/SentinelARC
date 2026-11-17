@@ -3,11 +3,11 @@ Async Synthesis Agent
 
 Agent responsible for synthesizing research findings into coherent, citation-rich reports.
 Implements a 5-Part Enterprise Literature Survey Taxonomy:
-1. Executive Summary & Problem Formulation
-2. Seminal Anchors & Foundational Paradigms (high-velocity breakout papers)
-3. Comparative Technical Methodologies & Empirical Benchmarks (includes automated comparison table)
-4. Scientific Debates, Contradictions & Trade-Offs (ingested from 4-layer Fact Checker)
-5. Open Research Frontiers & Practical Deployment Challenges
+1. Executive Summary & Key Takeaways
+2. Landmark Papers & Core Foundations (high-velocity breakout papers)
+3. Methods Comparison & Proven Benchmarks (includes automated comparison table)
+4. Key Debates, Trade-Offs & Disagreements (ingested from 4-layer Fact Checker)
+5. Future Directions & Real-World Challenges
 
 Features:
 - Ingests consensus status, epistemic confidence, and verified claims from FactChecker
@@ -236,15 +236,15 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
                 "You are SentinelARC, an elite academic research intelligence synthesizer. "
                 "Synthesize the provided academic literature into a rigorous, comprehensive 5-part literature review.\n\n"
                 "MANDATORY REPORT STRUCTURE:\n"
-                "## 1. Executive Overview & Problem Formulation\n"
+                "## 1. 📌 Executive Summary & Key Takeaways\n"
                 "Synthesize the state of the domain, core theoretical challenges, and why this problem is critical.\n\n"
-                "## 2. Seminal Anchors & Foundational Paradigms\n"
+                "## 2. 🏆 Landmark Papers & Core Foundations\n"
                 "Highlight papers marked with '[🏆 SEMINAL ANCHOR PAPER]'. Explain how they established the theoretical framework or baseline architectures before derivative works.\n\n"
-                "## 3. Comparative Technical Methodologies & Empirical Benchmarks\n"
+                "## 3. 📊 Methods Comparison & Proven Benchmarks\n"
                 "Synthesize algorithmic mechanisms, loss functions, architectural innovations, and empirical performance numbers. Emphasize verified quantitative benchmarks.\n\n"
-                "## 4. Scientific Debates, Contradictions & Empirical Trade-Offs\n"
+                "## 4. ⚖️ Key Debates, Trade-Offs & Disagreements\n"
                 "Analyze conflicting findings across papers (e.g. accuracy vs latency, failure modes under distribution shift, replication discrepancies). Discuss practical architectural compromises.\n\n"
-                "## 5. Open Research Frontiers & Practical Deployment Challenges\n"
+                "## 5. 🚀 Future Directions & Real-World Challenges\n"
                 "Identify unresolved bottlenecks, scalability challenges, and highest-impact directions for future research.\n\n"
                 "CRITICAL FORMATTING RULES:\n"
                 "- INLINE CLICKABLE CITATIONS: You MUST embed clickable Markdown citations natively in your sentences, formatted as [Paper Title](URL). Never use plain numeric citations like [1] or unclickable text.\n"
@@ -353,8 +353,8 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
 
         table_lines = [
             "### 📊 Comparative Technical Matrix\n",
-            "| # | Paper / Model | Year | Citations (Velocity) | Key Methodology | Verified Benchmark / Finding | Status |",
-            "|:---:|:---|:---:|:---:|:---|:---|:---:|"
+            "| # | Paper / Model | Year | Key Methodology | Verified Benchmark / Finding | Status |",
+            "|:---:|:---|:---:|:---|:---|:---:|"
         ]
 
         for i, s in enumerate(sources[:8]):
@@ -364,8 +364,6 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
             meta = metadata_map.get(url, s)
             
             year = meta.get("year") or s.get("year", "N/A")
-            c_count = meta.get("citationCount") or s.get("citationCount", 0)
-            vel = meta.get("citation_velocity") or s.get("citation_velocity", 0.0)
             is_anchor = meta.get("is_anchor") or s.get("is_anchor", False)
             
             badge = " 🏆" if is_anchor else ""
@@ -396,7 +394,7 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
             status_icon = "✅ Entailed" if verdict == "ENTAILMENT" else ("⚠️ Contested" if verdict == "CONTRADICTION" else "🔍 Verified")
 
             table_lines.append(
-                f"| {i+1} | {title_cell} | {year} | {c_count} ({vel}/yr) | {method[:75]}... | {bench_str[:65]}... | {status_icon} |"
+                f"| {i+1} | {title_cell} | {year} | {method[:75]}... | {bench_str[:65]}... | {status_icon} |"
             )
 
         return "\n".join(table_lines) + "\n\n"
@@ -446,9 +444,9 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
         lines = [
             f"# Research Synthesis: {query}\n\n",
             "> ⚠️ **Notice:** LLM synthesis endpoints temporarily reached capacity. Generated via SentinelARC Deterministic Academic Survey Index.\n\n",
-            "## 1. Executive Overview & Problem Formulation\n",
+            "## 1. 📌 Executive Summary & Key Takeaways\n",
             f"This report synthesizes empirical research investigating **{query}** across indexed scholarly databases.\n\n",
-            "## 2. Seminal Anchors & Foundational Paradigms\n"
+            "## 2. 🏆 Landmark Papers & Core Foundations\n"
         ]
         anchors = [s for s in sources if s.get("is_anchor")]
         if anchors:
@@ -457,16 +455,16 @@ class AsyncSynthesisAgent(AsyncBaseAgent):
         else:
             lines.append("Foundational paradigms established in literature reviewed below.\n\n")
 
-        lines.append("## 3. Comparative Technical Methodologies & Empirical Benchmarks\n")
+        lines.append("## 3. 📊 Methods Comparison & Proven Benchmarks\n")
         for idx, s in enumerate(sources):
             title = s.get("title", f"Source {idx+1}")
             url = s.get("url", "#")
             text = (s.get("content") or s.get("abstract") or "No text available.")[:600]
             lines.append(f"### {idx+1}. [{title}]({url})\n{text}...\n\n")
 
-        lines.append("## 4. Scientific Debates, Contradictions & Trade-Offs\n")
+        lines.append("## 4. ⚖️ Key Debates, Trade-Offs & Disagreements\n")
         lines.append("Trade-offs in empirical performance, computational overhead, and real-world robustness are highlighted across comparative studies.\n\n")
-        lines.append("## 5. Open Research Frontiers & Practical Deployment Challenges\n")
+        lines.append("## 5. 🚀 Future Directions & Real-World Challenges\n")
         lines.append("Key frontiers include edge deployment optimization, latency bounds, and cross-dataset generalization.\n\n")
         return "".join(lines)
 
